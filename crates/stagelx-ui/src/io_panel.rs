@@ -85,5 +85,35 @@ pub fn io_panel(mut ctx: EguiContexts, mut cfg: ResMut<IoConfig>) {
                 ui.label(egui::RichText::new(&cfg.sacn_status).small().color(egui::Color32::LIGHT_GRAY));
             });
             ui.monospace(format!("TX {}  RX {}", cfg.sacn_tx_count, cfg.sacn_rx_count));
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            // ── USB DMX (Enttec USB Pro) ───────────────────────────────────────
+            ui.label(
+                egui::RichText::new("USB DMX  (Enttec)")
+                    .strong()
+                    .color(egui::Color32::from_rgb(255, 220, 100)),
+            );
+
+            ui.checkbox(&mut cfg.usb_tx_enabled, "Enable TX");
+
+            ui.horizontal(|ui| {
+                ui.label("Port:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut cfg.usb_port)
+                        .hint_text("/dev/tty.usbserial-… or COM3")
+                        .desired_width(170.0),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Universe:");
+                ui.add(egui::DragValue::new(&mut cfg.usb_universe).range(1_u16..=32767_u16));
+            });
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&cfg.usb_status).small().color(egui::Color32::LIGHT_GRAY));
+            });
+            ui.monospace(format!("TX {}", cfg.usb_tx_count));
         });
 }

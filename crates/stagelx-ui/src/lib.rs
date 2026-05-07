@@ -6,7 +6,10 @@ pub mod programmer;
 use bevy::prelude::*;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 
-pub use stagelx_state::{FixtureLibraryRes, IoConfig, PatchRes, Programmer};
+pub use stagelx_state::{
+    DespawnFixtureEvent, FixtureLibraryRes, IoConfig, PatchEditState, PatchRes, Programmer,
+    SpawnFixtureEvent,
+};
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
@@ -20,6 +23,7 @@ impl Plugin for StageLxUiPlugin {
 
         app.init_resource::<Programmer>()
             .init_resource::<PatchRes>()
+            .init_resource::<PatchEditState>()
             .init_resource::<FixtureLibraryRes>()
             .init_resource::<IoConfig>()
             .add_systems(
