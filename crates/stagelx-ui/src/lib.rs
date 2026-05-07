@@ -10,6 +10,7 @@ pub use stagelx_state::{
     DespawnFixtureEvent, FixtureLibraryRes, IoConfig, PatchEditState, PatchRes, Programmer,
     SpawnFixtureEvent,
 };
+pub use stagelx_render::VenueLoadState;
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,7 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<PatchEditState>()
             .init_resource::<FixtureLibraryRes>()
             .init_resource::<IoConfig>()
+            .init_resource::<VenueLoadState>()
             .add_systems(
                 EguiPrimaryContextPass,
                 (

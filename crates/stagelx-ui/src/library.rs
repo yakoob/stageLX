@@ -1,13 +1,18 @@
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 use stagelx_gdtf::parse_mvr;
+use stagelx_render::{VenueLoadState, VenueRoot, load_venue};
 use crate::{FixtureLibraryRes, PatchRes, SpawnFixtureEvent};
 
 pub fn library_panel(
     mut ctx: EguiContexts,
     mut res: ResMut<FixtureLibraryRes>,
     mut patch: ResMut<PatchRes>,
+    mut venue_state: ResMut<VenueLoadState>,
+    venue_query: Query<Entity, With<VenueRoot>>,
     mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     egui::Window::new("Fixture Library")
         .default_pos([10.0, 370.0])
@@ -84,6 +89,40 @@ pub fn library_panel(
             });
 
             if let Some(ref err) = res.mvr_import_error.clone() {
+                ui.colored_label(egui::Color32::from_rgb(255, 80, 80), err);
+            }
+
+            ui.separator();
+
+            // ── Load Stage / Venue ─────────────────────────────────────────────
+            ui.label(egui::RichText::new("Stage / Venue").strong());
+            ui.label(
+                egui::RichText::new("OBJ or GLB/glTF — replaces any previously loaded venue.")
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut venue_state.import_path)
+                        .hint_text("Path to .obj or .glb file…")
+                        .desired_width(250.0),
+                );
+                if ui.button("Load").clicked() {
+                    let path = venue_state.import_path.trim().to_string();
+                    if path.is_empty() {
+                        venue_state.import_error = Some("Please enter a file path.".into());
+                    } else {
+                        match load_venue(&path, &mut commands, &mut meshes, &mut materials, &venue_query) {
+                            Ok(()) => {
+                                venue_state.import_error = None;
+                                venue_state.import_path.clear();
+                            }
+                            Err(e) => venue_state.import_error = Some(e),
+                        }
+                    }
+                }
+            });
+            if let Some(ref err) = venue_state.import_error.clone() {
                 ui.colored_label(egui::Color32::from_rgb(255, 80, 80), err);
             }
         });

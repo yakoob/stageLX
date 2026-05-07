@@ -115,5 +115,75 @@ pub fn io_panel(mut ctx: EguiContexts, mut cfg: ResMut<IoConfig>) {
                 ui.label(egui::RichText::new(&cfg.usb_status).small().color(egui::Color32::LIGHT_GRAY));
             });
             ui.monospace(format!("TX {}", cfg.usb_tx_count));
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            // ── MIDI Input ────────────────────────────────────────────────────
+            ui.label(
+                egui::RichText::new("MIDI Input")
+                    .strong()
+                    .color(egui::Color32::from_rgb(255, 180, 100)),
+            );
+
+            ui.checkbox(&mut cfg.midi_enabled, "Enable");
+            ui.horizontal(|ui| {
+                ui.label("Port:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut cfg.midi_port)
+                        .hint_text("Exact port name…")
+                        .desired_width(160.0),
+                );
+            });
+
+            ui.label(egui::RichText::new("CC Mapping").small().strong());
+            egui::Grid::new("midi_cc_grid")
+                .num_columns(4)
+                .spacing([6.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label("Dimmer"); ui.add(egui::DragValue::new(&mut cfg.midi_cc_dimmer).range(0_u8..=127_u8));
+                    ui.label("Pan");    ui.add(egui::DragValue::new(&mut cfg.midi_cc_pan).range(0_u8..=127_u8));
+                    ui.end_row();
+                    ui.label("Tilt");   ui.add(egui::DragValue::new(&mut cfg.midi_cc_tilt).range(0_u8..=127_u8));
+                    ui.label("Zoom");   ui.add(egui::DragValue::new(&mut cfg.midi_cc_zoom).range(0_u8..=127_u8));
+                    ui.end_row();
+                    ui.label("Red");    ui.add(egui::DragValue::new(&mut cfg.midi_cc_red).range(0_u8..=127_u8));
+                    ui.label("Green");  ui.add(egui::DragValue::new(&mut cfg.midi_cc_green).range(0_u8..=127_u8));
+                    ui.end_row();
+                    ui.label("Blue");   ui.add(egui::DragValue::new(&mut cfg.midi_cc_blue).range(0_u8..=127_u8));
+                    ui.label("Strobe"); ui.add(egui::DragValue::new(&mut cfg.midi_cc_strobe).range(0_u8..=127_u8));
+                    ui.end_row();
+                });
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&cfg.midi_status).small().color(egui::Color32::LIGHT_GRAY));
+            });
+            ui.monospace(format!("RX {}", cfg.midi_rx_count));
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            // ── OSC Input ─────────────────────────────────────────────────────
+            ui.label(
+                egui::RichText::new("OSC Input  (UDP)")
+                    .strong()
+                    .color(egui::Color32::from_rgb(180, 255, 120)),
+            );
+
+            ui.checkbox(&mut cfg.osc_enabled, "Enable");
+            ui.horizontal(|ui| {
+                ui.label("Port:");
+                ui.add(egui::DragValue::new(&mut cfg.osc_port).range(1024_u16..=65535_u16));
+            });
+            ui.label(
+                egui::RichText::new("/fixture/{id}/{attr}  f32")
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&cfg.osc_status).small().color(egui::Color32::LIGHT_GRAY));
+            });
+            ui.monospace(format!("RX {}", cfg.osc_rx_count));
         });
 }
