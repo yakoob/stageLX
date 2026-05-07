@@ -6,12 +6,13 @@ edition = "2021"
 [dependencies]
 stagelx-core      = { workspace = true }
 stagelx-dmx       = { workspace = true }
+stagelx-state     = { workspace = true }
+bevy              = { workspace = true }
 thiserror         = { workspace = true }
 tokio             = { workspace = true }
 crossbeam-channel = { workspace = true }
 
 # Protocol-specific crates added in Phase 3:
-# artnet_protocol = "0.2"
 # sacn = "0.9"
 # serialport = "4"
 # midir = "0.10"
