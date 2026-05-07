@@ -8,7 +8,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "stageLX — Phase 3".into(),
+                title: "stageLX — Phase 4".into(),
                 resolution: (1600_u32, 900_u32).into(),
                 ..default()
             }),
