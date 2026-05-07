@@ -17,6 +17,8 @@ pub struct StageLxRenderPlugin;
 impl Plugin for StageLxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<BeamMaterial>::default())
+            .add_observer(fixture::on_fixture_spawned)
+            .add_observer(fixture::on_fixture_despawned)
             .add_systems(
                 Startup,
                 (scene::setup_scene, setup_gobos, spawn_demo_fixtures).chain(),
@@ -62,6 +64,7 @@ fn spawn_demo_fixtures(
             rotation: [0.0, 0.0, 0.0],
         });
 
+        // Demo fixtures spawn directly to avoid the 1-frame event delay.
         spawn_fixture(
             &mut commands,
             &mut meshes,

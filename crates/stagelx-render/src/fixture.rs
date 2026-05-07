@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use stagelx_core::types::FixtureId;
-use stagelx_state::Programmer;
+use stagelx_state::{FixtureLibraryRes, PatchRes, Programmer, SpawnFixtureEvent, DespawnFixtureEvent};
 use crate::beam::{BeamMaterial, GoboLibrary, build_beam_cone};
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ pub struct BeamCone {
     pub id: FixtureId,
 }
 
-// ─── Spawning ─────────────────────────────────────────────────────────────────
+// ─── Spawn config ─────────────────────────────────────────────────────────────
 
 pub struct FixtureSpawnConfig {
     pub id: FixtureId,
@@ -59,6 +59,69 @@ impl Default for FixtureSpawnConfig {
         }
     }
 }
+
+// ─── Observers (Bevy 0.18 event pattern) ─────────────────────────────────────
+
+/// Observer: spawns the 3D entity tree when a fixture is added to the patch.
+pub fn on_fixture_spawned(
+    trigger: On<SpawnFixtureEvent>,
+    patch: Res<PatchRes>,
+    library: Res<FixtureLibraryRes>,
+    gobo_library: Res<GoboLibrary>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut beam_materials: ResMut<Assets<BeamMaterial>>,
+) {
+    let id = trigger.event().0;
+    let Some(inst) = patch.0.get(id) else { return };
+
+    let open_gobo = gobo_library.handles[0].clone();
+    let position  = Vec3::from(inst.position);
+
+    // Derive geometry parameters from GDTF if the type is loaded.
+    let (pan_range, tilt_range, beam_angle_deg) =
+        if let Some(ft) = library.library.get(&inst.fixture_type_id) {
+            let pan_range = ft.find_mode(&inst.dmx_mode)
+                .and_then(|m| m.channel_for("Pan"))
+                .map(|ch| (ch.physical_to - ch.physical_from).abs())
+                .unwrap_or(540.0);
+
+            let tilt_range = ft.find_mode(&inst.dmx_mode)
+                .and_then(|m| m.channel_for("Tilt"))
+                .map(|ch| (ch.physical_to - ch.physical_from).abs())
+                .unwrap_or(270.0);
+
+            (pan_range, tilt_range, ft.beam_angle())
+        } else {
+            (540.0, 270.0, 10.0)
+        };
+
+    spawn_fixture(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &mut beam_materials,
+        FixtureSpawnConfig { id, position, suspended: true, pan_range, tilt_range, beam_angle_deg },
+        open_gobo,
+    );
+}
+
+/// Observer: despawns the entity tree when a fixture is removed from the patch.
+pub fn on_fixture_despawned(
+    trigger: On<DespawnFixtureEvent>,
+    query: Query<(Entity, &FixtureVisual)>,
+    mut commands: Commands,
+) {
+    let target = trigger.event().0;
+    for (entity, vis) in &query {
+        if vis.id == target {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+// ─── Low-level spawn ──────────────────────────────────────────────────────────
 
 pub fn spawn_fixture(
     commands: &mut Commands,
@@ -88,24 +151,20 @@ pub fn spawn_fixture(
     let yoke_y = if cfg.suspended { -0.18 } else { 0.18 };
     let head_y = if cfg.suspended { -0.22 } else { 0.22 };
 
-    // ── Beam cone geometry ────────────────────────────────────────────────────
     const BEAM_HEIGHT: f32 = 18.0;
-    const LENS_OFFSET: f32 = 0.14; // half of head height 0.28
+    const LENS_OFFSET: f32 = 0.14;
 
-    let half_angle = (cfg.beam_angle_deg * 0.5).to_radians();
+    let half_angle  = (cfg.beam_angle_deg * 0.5).to_radians();
     let beam_radius = BEAM_HEIGHT * half_angle.tan();
 
     let (cone_y, cone_rot) = if cfg.suspended {
         (-(LENS_OFFSET + BEAM_HEIGHT * 0.5), Quat::IDENTITY)
     } else {
-        (
-            LENS_OFFSET + BEAM_HEIGHT * 0.5,
-            Quat::from_rotation_x(std::f32::consts::PI),
-        )
+        (LENS_OFFSET + BEAM_HEIGHT * 0.5, Quat::from_rotation_x(std::f32::consts::PI))
     };
 
     let cone_mesh = meshes.add(build_beam_cone(beam_radius, BEAM_HEIGHT));
-    let beam_mat = beam_materials.add(BeamMaterial {
+    let beam_mat  = beam_materials.add(BeamMaterial {
         color: LinearRgba::WHITE,
         gobo_params: Vec4::ZERO,
         gobo: open_gobo,
@@ -144,7 +203,6 @@ pub fn spawn_fixture(
                         Transform::from_xyz(0.0, if cfg.suspended { -0.18 } else { 0.18 }, 0.0),
                         BeamSource { id: cfg.id },
                     ));
-
                     head.spawn((
                         Mesh3d(cone_mesh),
                         MeshMaterial3d(beam_mat),
@@ -163,7 +221,7 @@ pub fn articulate_fixtures(
     mut yoke_q: Query<(&YokeJoint, &mut Transform), Without<HeadJoint>>,
     mut head_q: Query<(&HeadJoint, &mut Transform), Without<YokeJoint>>,
 ) {
-    let pan_deg = (programmer.pan - 0.5) * programmer.pan_range;
+    let pan_deg  = (programmer.pan  - 0.5) * programmer.pan_range;
     let tilt_deg = (programmer.tilt - 0.5) * programmer.tilt_range;
 
     for (_yoke, mut transform) in &mut yoke_q {
@@ -185,7 +243,6 @@ pub fn articulate_beams(
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
     gobo_library: Res<GoboLibrary>,
 ) {
-    // ── Strobe ────────────────────────────────────────────────────────────────
     let shutter_open = if programmer.strobe < 0.01 {
         true
     } else {
@@ -193,7 +250,6 @@ pub fn articulate_beams(
         (time.elapsed_secs() * hz) % 1.0 < 0.5
     };
 
-    // ── Colour + dimmer ───────────────────────────────────────────────────────
     const INTENSITY: f32 = 0.55;
     let d = programmer.dimmer * INTENSITY * if shutter_open { 1.0 } else { 0.0 };
     let color = LinearRgba::new(
@@ -203,15 +259,12 @@ pub fn articulate_beams(
         1.0,
     );
 
-    // ── Zoom → XZ scale ───────────────────────────────────────────────────────
-    const BASE_HALF_DEG: f32 = 5.0; // matches beam_angle_deg = 10° from config
+    const BASE_HALF_DEG: f32 = 5.0;
     let target_half_deg = 2.5 + programmer.zoom * 20.0;
-    let scale_xz = target_half_deg.to_radians().tan()
-        / BASE_HALF_DEG.to_radians().tan();
+    let scale_xz = target_half_deg.to_radians().tan() / BASE_HALF_DEG.to_radians().tan();
 
-    // ── Gobo rotation ─────────────────────────────────────────────────────────
     let gobo_rotation = time.elapsed_secs() * programmer.gobo_spin * std::f32::consts::TAU;
-    let gobo_params = Vec4::new(gobo_rotation, 0.0, 0.0, 0.0);
+    let gobo_params   = Vec4::new(gobo_rotation, 0.0, 0.0, 0.0);
 
     let gobo_handle = gobo_library
         .handles
@@ -221,23 +274,22 @@ pub fn articulate_beams(
 
     for (handle, mut transform) in &mut beam_q {
         if let Some(mat) = beam_materials.get_mut(handle.id()) {
-            mat.color = color;
+            mat.color       = color;
             mat.gobo_params = gobo_params;
-            mat.gobo = gobo_handle.clone();
+            mat.gobo        = gobo_handle.clone();
         }
         transform.scale = Vec3::new(scale_xz, 1.0, scale_xz);
     }
 
-    // ── Point-light (strobed, not dimmed by INTENSITY so floor stays bright) ──
     let light_intensity = programmer.dimmer * 500_000.0 * if shutter_open { 1.0 } else { 0.0 };
     let light_color = Color::srgb(programmer.color[0], programmer.color[1], programmer.color[2]);
     for mut light in &mut light_q {
         light.intensity = light_intensity;
-        light.color = light_color;
+        light.color     = light_color;
     }
 }
 
-// ─── Keyboard programmer system ───────────────────────────────────────────────
+// ─── Keyboard programmer ──────────────────────────────────────────────────────
 
 pub fn keyboard_programmer(
     keys: Res<ButtonInput<KeyCode>>,
@@ -266,11 +318,7 @@ pub fn keyboard_programmer(
     if keys.pressed(KeyCode::KeyC) { programmer.color = [0.0, 0.5, 1.0]; }
 
     if keys.pressed(KeyCode::KeyZ) {
-        let dir = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) {
-            -1.0
-        } else {
-            1.0
-        };
+        let dir = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { -1.0 } else { 1.0 };
         programmer.zoom = (programmer.zoom + dir * dt * 0.6).clamp(0.0, 1.0);
     }
 }
