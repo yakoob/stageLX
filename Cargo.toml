@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "crates/stagelx-core",
+    "crates/stagelx-gdtf",
+    "crates/stagelx-dmx",
+    "crates/stagelx-io",
+    "crates/stagelx-render",
+    "crates/stagelx-ui",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Internal crates
+stagelx-core   = { path = "crates/stagelx-core" }
+stagelx-gdtf   = { path = "crates/stagelx-gdtf" }
+stagelx-dmx    = { path = "crates/stagelx-dmx" }
+stagelx-io     = { path = "crates/stagelx-io" }
+stagelx-render = { path = "crates/stagelx-render" }
+stagelx-ui     = { path = "crates/stagelx-ui" }
+
+# Shared external deps
+bevy              = { version = "0.15" }
+bevy_egui         = { version = "0.30" }
+tokio             = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
+crossbeam-channel = "0.5"
+thiserror         = "2"
+serde             = { version = "1", features = ["derive"] }
+zip               = "2"
+quick-xml         = { version = "0.37", features = ["serialize"] }
+image             = { version = "0.25", default-features = false, features = ["png"] }
+
+[package]
+name    = "stagelx"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "stagelx"
+path = "src/main.rs"
+
+[dependencies]
+bevy           = { workspace = true }
+stagelx-core   = { workspace = true }
+stagelx-gdtf   = { workspace = true }
+stagelx-dmx    = { workspace = true }
+stagelx-io     = { workspace = true }
+stagelx-render = { workspace = true }
+stagelx-ui     = { workspace = true }

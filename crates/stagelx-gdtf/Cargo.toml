@@ -1,0 +1,12 @@
+[package]
+name    = "stagelx-gdtf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stagelx-core = { workspace = true }
+thiserror    = { workspace = true }
+serde        = { workspace = true }
+zip          = { workspace = true }
+quick-xml    = { workspace = true }
+image        = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name    = "stagelx-io"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stagelx-core      = { workspace = true }
+stagelx-dmx       = { workspace = true }
+thiserror         = { workspace = true }
+tokio             = { workspace = true }
+crossbeam-channel = { workspace = true }
+
+# Protocol-specific crates added in Phase 3:
+# artnet_protocol = "0.2"
+# sacn = "0.9"
+# serialport = "4"
+# midir = "0.10"
+# rosc = "0.10"
