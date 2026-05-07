@@ -1,4 +1,8 @@
-use bevy::prelude::*;
+use bevy::{
+    asset::RenderAssetUsages,
+    mesh::{Indices, PrimitiveTopology},
+    prelude::*,
+};
 use stagelx_core::types::FixtureId;
 use stagelx_state::{FixtureLibraryRes, PatchRes, Programmer, SpawnFixtureEvent, DespawnFixtureEvent};
 use crate::beam::{BeamMaterial, GoboLibrary, build_beam_cone};
@@ -45,6 +49,8 @@ pub struct FixtureSpawnConfig {
     pub pan_range: f32,
     pub tilt_range: f32,
     pub beam_angle_deg: f32,
+    /// Pre-built Bevy mesh from GDTF 3DS model data; None = use procedural cuboid.
+    pub body_mesh: Option<Handle<Mesh>>,
 }
 
 impl Default for FixtureSpawnConfig {
@@ -56,6 +62,7 @@ impl Default for FixtureSpawnConfig {
             pan_range: 540.0,
             tilt_range: 270.0,
             beam_angle_deg: 10.0,
+            body_mesh: None,
         }
     }
 }
@@ -79,8 +86,8 @@ pub fn on_fixture_spawned(
     let open_gobo = gobo_library.handles[0].clone();
     let position  = Vec3::from(inst.position);
 
-    // Derive geometry parameters from GDTF if the type is loaded.
-    let (pan_range, tilt_range, beam_angle_deg) =
+    // Derive geometry parameters and optional 3DS body mesh from GDTF.
+    let (pan_range, tilt_range, beam_angle_deg, body_mesh) =
         if let Some(ft) = library.library.get(&inst.fixture_type_id) {
             let pan_range = ft.find_mode(&inst.dmx_mode)
                 .and_then(|m| m.channel_for("Pan"))
@@ -92,9 +99,11 @@ pub fn on_fixture_spawned(
                 .map(|ch| (ch.physical_to - ch.physical_from).abs())
                 .unwrap_or(270.0);
 
-            (pan_range, tilt_range, ft.beam_angle())
+            let body_mesh = mesh_from_gdtf(ft, &mut meshes);
+
+            (pan_range, tilt_range, ft.beam_angle(), body_mesh)
         } else {
-            (540.0, 270.0, 10.0)
+            (540.0, 270.0, 10.0, None)
         };
 
     spawn_fixture(
@@ -102,7 +111,7 @@ pub fn on_fixture_spawned(
         &mut meshes,
         &mut materials,
         &mut beam_materials,
-        FixtureSpawnConfig { id, position, suspended: true, pan_range, tilt_range, beam_angle_deg },
+        FixtureSpawnConfig { id, position, suspended: true, pan_range, tilt_range, beam_angle_deg, body_mesh },
         open_gobo,
     );
 }
@@ -144,7 +153,7 @@ pub fn spawn_fixture(
         ..default()
     });
 
-    let body_mesh = meshes.add(Cuboid::new(0.30, 0.25, 0.30));
+    let body_mesh = cfg.body_mesh.unwrap_or_else(|| meshes.add(Cuboid::new(0.30, 0.25, 0.30)));
     let yoke_mesh = meshes.add(Cuboid::new(0.35, 0.08, 0.08));
     let head_mesh = meshes.add(Cuboid::new(0.22, 0.28, 0.22));
 
@@ -321,4 +330,25 @@ pub fn keyboard_programmer(
         let dir = if keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight) { -1.0 } else { 1.0 };
         programmer.zoom = (programmer.zoom + dir * dt * 0.6).clamp(0.0, 1.0);
     }
+}
+
+// ─── GDTF 3DS geometry helper ─────────────────────────────────────────────────
+
+/// Try to build a Bevy mesh from the first 3DS model embedded in a GDTF fixture type.
+/// Returns None if no models are present or parsing fails.
+pub fn mesh_from_gdtf(
+    ft: &stagelx_gdtf::gdtf::GdtfFixtureType,
+    meshes: &mut Assets<Mesh>,
+) -> Option<Handle<Mesh>> {
+    let (_, bytes) = ft.models.first()?;
+    let scene = stagelx_3ds::parse(bytes).ok()?;
+    let mesh3d = scene.meshes.into_iter().next()?;
+    let (pos, norm, uvs, idx) = stagelx_3ds::to_bevy_buffers(&mesh3d);
+
+    let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+    m.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    m.insert_attribute(Mesh::ATTRIBUTE_NORMAL,   norm);
+    m.insert_attribute(Mesh::ATTRIBUTE_UV_0,     uvs);
+    m.insert_indices(Indices::U32(idx));
+    Some(meshes.add(m))
 }

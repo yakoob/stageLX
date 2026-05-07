@@ -2,6 +2,7 @@ pub mod beam;
 pub mod fixture;
 pub mod gobo;
 pub mod scene;
+pub mod venue;
 
 use bevy::prelude::*;
 use stagelx_core::{
@@ -11,12 +12,14 @@ use stagelx_core::{
 use stagelx_state::{FixtureLibraryRes, PatchRes};
 use beam::{BeamMaterial, GoboLibrary, setup_gobos};
 use fixture::{FixtureSpawnConfig, spawn_fixture};
+pub use venue::{VenueRoot, VenueLoadState, load_venue};
 
 pub struct StageLxRenderPlugin;
 
 impl Plugin for StageLxRenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<BeamMaterial>::default())
+        app.init_resource::<VenueLoadState>()
+            .add_plugins(MaterialPlugin::<BeamMaterial>::default())
             .add_observer(fixture::on_fixture_spawned)
             .add_observer(fixture::on_fixture_despawned)
             .add_systems(
@@ -77,6 +80,7 @@ fn spawn_demo_fixtures(
                 pan_range: 540.0,
                 tilt_range: 270.0,
                 beam_angle_deg: 10.0,
+                body_mesh: None,
             },
             open_gobo.clone(),
         );

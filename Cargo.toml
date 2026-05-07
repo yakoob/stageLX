@@ -33,6 +33,10 @@ zip               = "2"
 quick-xml         = { version = "0.37", features = ["serialize"] }
 image             = { version = "0.25", default-features = false, features = ["png"] }
 serialport        = "4"
+midir             = "0.9"
+rosc              = "0.5"
+tobj              = { version = "4", features = ["async"] }
+gltf              = "1"
 
 [package]
 name    = "stagelx"
