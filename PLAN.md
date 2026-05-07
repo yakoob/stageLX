@@ -52,12 +52,13 @@ stageLX/
 ├── PLAN.md
 │
 ├── crates/
-│   ├── stageLX-core/          # shared types: patch, universe, fixture instance
-│   ├── stageLX-gdtf/          # GDTF + MVR parser
-│   ├── stageLX-dmx/           # DMX frame engine + universe buffer
-│   ├── stageLX-io/            # Art-Net, sACN, USB, MIDI, OSC
-│   ├── stageLX-render/        # Bevy plugin: 3D scene, beams, gobos, fog
-│   └── stageLX-ui/            # egui panels: patch, programmer, scene
+│   ├── stagelx-core/          # shared types: patch, universe, fixture instance
+│   ├── stagelx-gdtf/          # GDTF + MVR parser
+│   ├── stagelx-dmx/           # DMX frame engine + HTP/LTP merge
+│   ├── stagelx-state/         # shared Bevy Resources (Programmer, PatchRes, IoConfig)
+│   ├── stagelx-io/            # Art-Net, sACN, USB, MIDI, OSC
+│   ├── stagelx-render/        # Bevy plugin: 3D scene, beams, gobos, fog
+│   └── stagelx-ui/            # egui panels: patch, programmer, scene, I/O
 │
 └── src/
     └── main.rs                # Bevy App wiring
@@ -67,12 +68,27 @@ stageLX/
 
 | Crate | Responsibility |
 |---|---|
-| `stageLX-core` | `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`, attribute model |
-| `stageLX-gdtf` | Parse `.gdtf` (ZIP+XML), geometry trees, DMX modes, wheels, physicals |
-| `stageLX-dmx` | DMX frame generation, merge strategies (HTP/LTP), universe buffers |
-| `stageLX-io` | Art-Net Tx/Rx, sACN Tx/Rx, USB serial (Enttec), MIDI, OSC |
-| `stageLX-render` | Bevy plugin: volumetric beams, gobo projection, color, fog medium |
-| `stageLX-ui` | egui: patch editor, programmer, fixture library, scene graph |
+| `stagelx-core` | `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`, attribute model |
+| `stagelx-gdtf` | Parse `.gdtf` (ZIP+XML), geometry trees, DMX modes, wheels, physicals |
+| `stagelx-dmx` | DMX frame generation, merge strategies (HTP/LTP), `DmxEngine` |
+| `stagelx-state` | Shared Bevy `Resource`s: `Programmer`, `PatchRes`, `FixtureLibraryRes`, `IoConfig` |
+| `stagelx-io` | Art-Net Tx/Rx, sACN Tx/Rx, USB serial (Enttec), MIDI, OSC |
+| `stagelx-render` | Bevy plugin: volumetric beams, gobo projection, color, fog medium |
+| `stagelx-ui` | egui: patch editor, programmer, fixture library, DMX I/O panel |
+
+### Dependency Graph
+
+```
+stagelx-core ──────────────────────────────────────────┐
+stagelx-gdtf (→ core) ─────────────────────────────────┤
+stagelx-dmx  (→ core) ─────────────────────────────────┤
+                                                        ▼
+stagelx-state (→ core, gdtf) ──► stagelx-io (→ state, dmx)
+                              ──► stagelx-render (→ state)
+                              ──► stagelx-ui    (→ state)
+```
+
+All feature crates (io, render, ui) are leaf nodes — none depend on each other.
 
 ---
 
@@ -80,18 +96,18 @@ stageLX/
 
 | Purpose | Crate |
 |---|---|
-| App/ECS/rendering | `bevy` (0.14+) |
+| App/ECS/rendering | `bevy` 0.18.1 |
 | Low-level GPU | `wgpu` (via Bevy) |
-| UI panels | `bevy_egui` + `egui` |
+| UI panels | `bevy_egui` 0.39.1 + `egui` |
 | GDTF/MVR ZIP parsing | `zip`, `quick-xml` |
 | 3D model loading (GDTF geometry) | `bevy_gltf` or `obj` |
-| Art-Net | `artnet-rs` or custom UDP |
-| sACN (E1.31) | `sacn` crate or custom |
+| Art-Net | custom UDP (no external crate) |
+| sACN (E1.31) | custom UDP per ANSI E1.31-2016 (no external crate) |
+| I/O thread bridge | `crossbeam-channel` (bounded 256, no tokio) |
 | USB/serial DMX | `serialport` |
 | MIDI | `midir` |
 | OSC | `rosc` |
-| Async runtime | `tokio` (for I/O tasks, bridged to Bevy via channels) |
-| Image loading (gobos) | `image` |
+| Image loading (gobos) | `image` (via Bevy asset loader) |
 
 ---
 
@@ -158,16 +174,22 @@ MVR files extend this with scene context:
 
 ## I/O Protocol Details
 
-### Art-Net (Output + Input)
-- UDP port 6454
-- ArtDMX packet for output (universe 0–32767)
-- ArtPoll/ArtPollReply for node discovery
-- Run in dedicated `tokio` task, bridge to Bevy via `crossbeam-channel`
+### Art-Net (Output + Input) ✅ Phase 3
+- UDP port 6454, custom ArtDMX implementation (no external crate)
+- ArtDMX packet TX at 44 Hz via Bevy `FixedUpdate`
+- RX via blocking socket cloned from TX socket (`try_clone` avoids EADDRINUSE)
+- RX thread bridges to Bevy via `crossbeam-channel` (bounded 256)
+- Source IP allowlist (cached, rebuilt only on config change)
+- Universe cap: 64 universes per source (amplification attack mitigation)
+- Configurable TX destination (default: limited broadcast 255.255.255.255)
+- ArtPoll/ArtPollReply for node discovery (future)
 
-### sACN / E1.31 (Output + Input)
-- UDP multicast or unicast
-- Priority 100 default, configurable per universe
-- Run in dedicated `tokio` task
+### sACN / E1.31 (Output + Input) ✅ Phase 3
+- UDP port 5568, full ANSI E1.31-2016 Data Packet (638 bytes)
+- TX: rolling sequence counter, multicast 239.255.hi.lo or configurable unicast
+- RX: same clone-and-block pattern as Art-Net
+- Priority 100 default, configurable; universe cap 64
+- ArtPoll/ArtPollReply for node discovery (future)
 
 ### USB DMX (Output)
 - Enttec DMX USB Pro protocol over serial (`serialport` crate)
@@ -188,55 +210,58 @@ MVR files extend this with scene context:
 
 ## Implementation Phases
 
-### Phase 1 — Foundation (Weeks 1–4)
+### Phase 1 — Foundation ✅ Complete
 **Goal**: A Bevy app that loads a GDTF file and renders placeholder fixtures in 3D.
 
-- [ ] Cargo workspace scaffold
-- [ ] `stageLX-gdtf`: parse GDTF ZIP + `description.xml` (fixture type, DMX modes, attributes)
-- [ ] `stageLX-core`: `FixtureType`, `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`
-- [ ] `stageLX-render`: Bevy plugin — procedural fixture geometry, static scene camera
-- [ ] Basic egui panel: add fixture from library, set DMX address
-- [ ] `stageLX-dmx`: universe buffer + attribute→DMX resolution from GDTF channel functions
+- [x] Cargo workspace scaffold
+- [x] `stagelx-gdtf`: parse GDTF ZIP + `description.xml` (fixture type, DMX modes, attributes)
+- [x] `stagelx-core`: `FixtureType`, `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`
+- [x] `stagelx-render`: Bevy plugin — procedural fixture geometry, static scene camera
+- [x] Basic egui panels: fixture library, patch editor, programmer
+- [x] `stagelx-dmx`: `DmxEngine` with HTP/LTP merge, multi-source priority stack
 
-**Milestone**: Patch 10 moving heads, manually set Pan/Tilt/Dimmer values, see fixtures move in 3D.
+**Milestone**: Patch 10 moving heads, manually set Pan/Tilt/Dimmer values, see fixtures move in 3D. ✅
 
 ---
 
-### Phase 2 — Programmer + Beam Rendering (Weeks 5–8)
+### Phase 2 — Programmer + Beam Rendering ✅ Complete
 **Goal**: Real-time beam visualisation driven by the built-in programmer.
 
-- [ ] Programmer UI: attribute faders, color picker, gobo selector
-- [ ] Selection model: select fixtures, record groups
-- [ ] Beam cone mesh with additive blending shader
-- [ ] Color mixing (RGB/CMY/ColorWheel) in shader
-- [ ] Gobo projection (rotating gobo texture)
-- [ ] Zoom/beam angle attribute driving cone geometry
-- [ ] Strobe simulation (Shutter channel)
-- [ ] Dimmer channel → beam intensity
+- [x] Programmer UI: dimmer, pan/tilt, RGB color, zoom, strobe, gobo index + spin
+- [x] Beam cone mesh with additive blending (`BeamMaterial` — custom WGSL shader)
+- [x] Color mixing (RGB) in shader, driven live from Programmer resource
+- [x] Gobo projection: rotating texture sampled in the beam material
+- [x] Zoom → XZ scale on beam cone geometry
+- [x] Strobe simulation via time-based shutter open/close
+- [x] Dimmer → beam intensity and point-light intensity
+- [x] Keyboard programmer: arrow keys (pan/tilt), +/- (dimmer), R/G/B/W/X/C (color), Z (zoom)
 
-**Milestone**: Full real-time beam visualization driven by programmer at 60 fps with 100 fixtures.
+**Milestone**: Full real-time beam visualization driven by programmer at 60 fps with 10 fixtures. ✅
 
 ---
 
-### Phase 3 — DMX I/O (Weeks 9–12)
+### Phase 3 — DMX I/O ✅ Complete
 **Goal**: Send and receive DMX from real hardware and consoles.
 
-- [ ] `stageLX-io`: Art-Net output (ArtDMX packets)
-- [ ] Art-Net input listener (receive from consoles like MA3, EOS)
-- [ ] sACN output
-- [ ] sACN input
-- [ ] USB DMX output (Enttec USB Pro)
-- [ ] HTP merge across input sources
-- [ ] Universe/port configuration UI
+- [x] `stagelx-state`: extract shared Bevy Resources into dependency-inversion hub
+- [x] `stagelx-io`: Art-Net output (ArtDMX packets, 44 Hz `FixedUpdate`)
+- [x] Art-Net input listener (blocking RX thread, `crossbeam-channel` bridge)
+- [x] sACN E1.31 output (638-byte Data Packet, rolling sequence, multicast/unicast)
+- [x] sACN input (separate port 5568 socket, same clone-and-block pattern)
+- [x] HTP merge across input sources via `DmxEngine` priority stack
+- [x] Universe/port configuration UI (DMX I/O egui panel)
+- [x] Security: source IP allowlist, universe cap (64), configurable TX destinations
+- [ ] USB DMX output (Enttec USB Pro) — deferred to Phase 4
 
-**Milestone**: Receive Art-Net from a console, visualize result, simultaneously output Art-Net and USB DMX.
+**Milestone**: Receive Art-Net or sACN from a console, visualize result, simultaneously output both protocols. ✅
 
 ---
 
-### Phase 4 — MVR + GDTF Geometry (Weeks 13–16)
+### Phase 4 — MVR + GDTF Geometry + USB DMX (Weeks 13–16)
 **Goal**: Import a full show file from MA3 / Depence2 and see the venue + patch.
 
-- [ ] `stageLX-gdtf`: MVR parser (scene positions, fixture placement, trusses)
+- [ ] USB DMX output (Enttec USB Pro protocol over `serialport`, single universe)
+- [ ] `stagelx-gdtf`: MVR parser (scene positions, fixture placement, trusses)
 - [ ] Import MVR: place fixtures in 3D from MVR transforms
 - [ ] Load GDTF 3D geometry (OBJ/3DS → Bevy mesh)
 - [ ] Articulated geometry: yoke/head rotation driven by Pan/Tilt
@@ -266,15 +291,19 @@ MVR files extend this with scene context:
 
 1. **GDTF 3D model format**: GDTF v1.1 uses 3DS format for geometry. Need a 3DS loader or conversion pipeline (3DS → glTF at import time). Evaluate `three-d` or write a minimal 3DS loader.
 
-2. **Bevy version**: Bevy 0.14 vs 0.15 — 0.15 has Required Components which maps well to fixture attributes. Track release schedule.
+2. **Bevy version**: Settled on Bevy 0.18.1. ✅
 
-3. **Shader approach for beams**: Custom wgpu shader via Bevy's `Material` trait vs. `bevy_hanabi` particle system for beam dust. Custom shader gives more control for gobo projection.
+3. **Shader approach for beams**: Resolved — custom `BeamMaterial` via Bevy's `Material` trait + WGSL shader with additive blending. Gobo projection via rotating UV texture lookup in the beam material. ✅
 
 4. **Cue system**: Not in scope for v1, but the data model should not foreclose adding a cue stack later. `DmxBuffer` should support named snapshots.
 
 5. **GDTF-share API**: gdtf-share.com has a REST API for downloading fixture files by manufacturer/model. Worth integrating a fixture browser that can pull directly from the share.
 
 6. **Test strategy**: GDTF files vary wildly in quality. Build a fixture file test corpus (grab 20–30 files from gdtf-share.com across manufacturers) and validate parser against them early.
+
+7. **Art-Net node discovery**: ArtPoll/ArtPollReply not yet implemented. Nodes may need manual IP configuration until then.
+
+8. **sACN multicast join**: `IP_ADD_MEMBERSHIP` not yet set — relies on IGMP snooping or broadcast fallback on managed LANs. Works on direct links; may need explicit join for complex network topologies.
 
 ---
 
@@ -301,4 +330,4 @@ Suggested `.gitignore`: standard Rust gitignore + `*.gdtf` test files (large bin
 
 ---
 
-*Last updated: 2026-05-07*
+*Last updated: 2026-05-07 — Phase 3 complete*
