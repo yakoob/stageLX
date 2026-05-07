@@ -19,8 +19,8 @@ stagelx-render = { path = "crates/stagelx-render" }
 stagelx-ui     = { path = "crates/stagelx-ui" }
 
 # Shared external deps
-bevy              = { version = "0.15" }
-bevy_egui         = { version = "0.30" }
+bevy              = { version = "0.18.0" }
+bevy_egui         = { version = "0.39.1" }
 tokio             = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"] }
 crossbeam-channel = "0.5"
 thiserror         = "2"

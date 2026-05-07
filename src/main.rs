@@ -7,7 +7,7 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "stageLX — Phase 1".into(),
-                resolution: (1600.0, 900.0).into(),
+                resolution: (1600_u32, 900_u32).into(),
                 ..default()
             }),
             ..default()

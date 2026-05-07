@@ -35,9 +35,10 @@ pub fn setup_scene(
         Transform::from_xyz(0.0, 8.0, 22.0).looking_at(Vec3::new(0.0, 2.0, 0.0), Vec3::Y),
     ));
 
-    // Dim ambient so beam lights are visible
-    commands.insert_resource(AmbientLight {
+    // Dim ambient so beam lights are visible (Bevy 0.18: component, not Resource)
+    commands.spawn(AmbientLight {
         color: Color::srgb(0.04, 0.04, 0.07),
         brightness: 80.0,
+        affects_lightmapped_meshes: true,
     });
 }
