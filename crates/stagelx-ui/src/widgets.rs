@@ -79,13 +79,11 @@ pub fn section_header(ui: &mut Ui, label: &str, hint: Option<&str>) {
 
 pub fn pill(ui: &mut Ui, label: impl Into<String>, state: Option<DotState>) -> Response {
     let label = label.into();
-    let mut text = RichText::new(&label).size(10.0).monospace();
     let (bg, border, text_color) = match state {
         Some(DotState::Live) => (PILL_LIVE_BG, PILL_LIVE_BORDER, RX),
         Some(DotState::Idle) | None => (BG_RAISED, BORDER_SOFT, FG_SECONDARY),
         Some(s) => (BG_RAISED, BORDER_SOFT, s.color()),
     };
-    text = text.color(text_color);
 
     let desired_size = {
         let galley = ui.painter().layout_no_wrap(
@@ -476,8 +474,6 @@ impl<'a> Widget for Encoder<'a> {
     fn ui(self, ui: &mut Ui) -> Response {
         let desired_size = Vec2::new(self.size, self.size + 24.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::drag());
-        let id = ui.id().with(self.label);
-
         if response.dragged() {
             let delta = response.drag_delta().x;
             let range = self.max - self.min;
@@ -571,13 +567,15 @@ fn arc_points(cx: f32, cy: f32, r: f32, start_deg: f32, end_deg: f32) -> Vec<Pos
 // Dropzone
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn dropzone(ui: &mut Ui, label: &str, hint: &str, on_browse: impl FnOnce()) -> Response {
+/// Dropzone widget. Returns `true` if the Browse button was clicked.
+/// Callers handle the file-picker themselves so no closure capture is needed.
+pub fn dropzone(ui: &mut Ui, label: &str, hint: &str) -> bool {
     let desired_size = Vec2::new(ui.available_width(), 52.0);
-    let (rect, response) = ui.allocate_exact_size(desired_size, Sense::hover());
+    let (rect, _response) = ui.allocate_exact_size(desired_size, Sense::hover());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect_filled(rect, 3.0, Color32::from_rgba_premultiplied(10, 11, 13, 153));
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_STRONG), StrokeKind::Middle); // dashed not trivial in egui
+        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_STRONG), StrokeKind::Middle);
 
         // Icon tile
         let tile_rect = Rect::from_center_size(
@@ -587,7 +585,7 @@ pub fn dropzone(ui: &mut Ui, label: &str, hint: &str, on_browse: impl FnOnce()) 
         painter.rect_filled(tile_rect, 3.0, BG_RAISED);
         painter.rect_stroke(tile_rect, 3.0, Stroke::new(1.0, BORDER), StrokeKind::Middle);
 
-        // Label
+        // Label + hint
         painter.text(
             Pos2::new(rect.min.x + 48.0, rect.center().y - 6.0),
             egui::Align2::LEFT_CENTER,
@@ -609,17 +607,13 @@ pub fn dropzone(ui: &mut Ui, label: &str, hint: &str, on_browse: impl FnOnce()) 
         Pos2::new(rect.max.x - 68.0, rect.center().y - 12.0),
         Vec2::new(60.0, 24.0),
     );
-    let mut browsed = false;
-    ui.allocate_ui_at_rect(btn_rect, |ui| {
+    let mut clicked = false;
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(btn_rect), |ui| {
         if ui.add_sized([60.0, 24.0], egui::Button::new("Browse").fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).clicked() {
-            browsed = true;
+            clicked = true;
         }
     });
-    if browsed {
-        on_browse();
-    }
-
-    response
+    clicked
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -644,12 +638,6 @@ pub fn tab_button(ui: &mut Ui, label: &str, active: bool, badge: Option<usize>) 
 }
 
 pub fn library_tab(ui: &mut Ui, label: &str, active: bool, badge: Option<usize>) -> Response {
-    let mut rich = RichText::new(label)
-        .size(11.0)
-        .color(if active { FG } else { FG_SECONDARY });
-    if active {
-        rich = rich.strong();
-    }
     let galley = ui.painter().layout_no_wrap(label.to_string(), TextStyle::Body.resolve(ui.style()), if active { FG } else { FG_SECONDARY });
     let width = galley.size().x + 24.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
@@ -687,6 +675,44 @@ pub fn library_tab(ui: &mut Ui, label: &str, active: bool, badge: Option<usize>)
 // Panel chrome helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
+fn icon_btn(ui: &mut Ui, paint: impl Fn(&egui::Painter, Rect, Color32)) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let color = if response.hovered() { FG } else { FG_MUTED };
+        paint(ui.painter(), rect, color);
+    }
+    response
+}
+
+/// Corners-out glyph — use for panel detach.
+pub fn icon_btn_detach(ui: &mut Ui) -> Response {
+    icon_btn(ui, |p, rect, color| {
+        let stroke = Stroke::new(1.5, color);
+        let c = rect.center();
+        let r = 4.5_f32;
+        let arm = 3.0_f32;
+        p.line_segment([Pos2::new(c.x - r,       c.y - r),       Pos2::new(c.x - r + arm, c.y - r      )], stroke);
+        p.line_segment([Pos2::new(c.x - r,       c.y - r),       Pos2::new(c.x - r,       c.y - r + arm)], stroke);
+        p.line_segment([Pos2::new(c.x + r - arm, c.y - r),       Pos2::new(c.x + r,       c.y - r      )], stroke);
+        p.line_segment([Pos2::new(c.x + r,       c.y - r),       Pos2::new(c.x + r,       c.y - r + arm)], stroke);
+        p.line_segment([Pos2::new(c.x - r,       c.y + r - arm), Pos2::new(c.x - r,       c.y + r      )], stroke);
+        p.line_segment([Pos2::new(c.x - r,       c.y + r),       Pos2::new(c.x - r + arm, c.y + r      )], stroke);
+        p.line_segment([Pos2::new(c.x + r,       c.y + r - arm), Pos2::new(c.x + r,       c.y + r      )], stroke);
+        p.line_segment([Pos2::new(c.x + r,       c.y + r),       Pos2::new(c.x + r - arm, c.y + r      )], stroke);
+    })
+}
+
+/// Single-bar glyph — use for panel minimize / restore.
+pub fn icon_btn_minimize(ui: &mut Ui) -> Response {
+    icon_btn(ui, |p, rect, color| {
+        let c = rect.center();
+        p.line_segment(
+            [Pos2::new(c.x - 4.5, c.y), Pos2::new(c.x + 4.5, c.y)],
+            Stroke::new(1.5, color),
+        );
+    })
+}
+
 pub fn panel_titlebar(
     ui: &mut Ui,
     title: &str,
@@ -702,12 +728,12 @@ pub fn panel_titlebar(
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if let Some(cb) = on_minimize {
-                if ui.add_sized([18.0, 18.0], egui::Button::new("━").small().fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+                if icon_btn_minimize(ui).on_hover_text("Minimize").clicked() {
                     cb();
                 }
             }
             if let Some(cb) = on_detach {
-                if ui.add_sized([18.0, 18.0], egui::Button::new("⛶").small().fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+                if icon_btn_detach(ui).on_hover_text("Detach").clicked() {
                     cb();
                 }
             }

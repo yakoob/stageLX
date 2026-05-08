@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Pos2, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
-use stagelx_core::{fixture::{DmxChannelMap, FixtureInstance}, types::{DmxAddress, FixtureId}};
+use stagelx_core::{fixture::FixtureInstance, types::{DmxAddress, FixtureId}};
 
 use crate::theme::*;
 use crate::widgets;
@@ -56,7 +56,7 @@ pub fn patch_panel_docked(
     // ── Toolbar ───────────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
         // Search input — single widget, no overlapping painted rect
-        let search_width = available_width - 180.0;
+        let search_width = (available_width - 180.0).max(0.0);
         ui.add_sized([search_width, 24.0], egui::TextEdit::singleline(&mut filter.query).hint_text("🔍  Filter by name, type, address…"));
 
         // Quick chips
@@ -120,9 +120,9 @@ pub fn patch_panel_docked(
                 for (i, f) in fixtures.iter().enumerate() {
                     let selected = patch_sel.selected_ids.contains(&f.id);
                     let row_rect = ui.available_rect_before_wrap();
-                    let full_width = row_rect.width();
+                    let full_width = row_rect.width().max(0.0);
 
-                    let response = ui.allocate_ui_with_layout(
+                    let _response = ui.allocate_ui_with_layout(
                         Vec2::new(full_width, row_height),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
@@ -224,7 +224,7 @@ pub fn patch_panel_docked(
                                     egui::TextStyle::Body.resolve(ui.style()),
                                     if selected { FG } else { FG_SECONDARY },
                                 );
-                                x += 86.0;
+                                let _ = x;
 
                                 // Status
                                 painter.text(
@@ -267,7 +267,7 @@ pub fn patch_panel_docked(
             painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
         }
 
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 widgets::eyebrow_widget(ui, "Add Fixture");

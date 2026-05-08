@@ -30,7 +30,7 @@ pub fn io_panel_docked(
             painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
         }
 
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.horizontal(|ui| {
                 let protocols = [
                     ("Art-Net", ActiveProtocol::ArtNet),
@@ -107,10 +107,10 @@ pub fn io_panel_docked(
             painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
         }
 
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                let col_width = (available_width - 16.0) / 2.0;
+                let col_width = ((available_width - 16.0) / 2.0).max(0.0);
                 // TX
                 ui.allocate_ui_with_layout(Vec2::new(col_width, 56.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
                     ui.horizontal(|ui| {
@@ -283,7 +283,7 @@ fn midi_config(ui: &mut Ui, cfg: &mut IoConfig) {
                 Pos2::new(rect.max.x - dv_w - 4.0, rect.min.y + 2.0),
                 Vec2::new(dv_w, 20.0),
             );
-            col.allocate_ui_at_rect(dv_rect, |ui| {
+            col.allocate_new_ui(egui::UiBuilder::new().max_rect(dv_rect), |ui| {
                 ui.add(egui::DragValue::new(*val).range(0_u8..=127_u8));
             });
             col.add_space(4.0);
@@ -311,7 +311,7 @@ fn osc_config(ui: &mut Ui, cfg: &mut IoConfig) {
             painter.rect_filled(rect, 3.0, BG_INPUT);
             painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
         }
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.add_space(8.0);
             widgets::eyebrow_widget(ui, "Address Pattern");
             ui.add_space(4.0);

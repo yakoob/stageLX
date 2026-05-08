@@ -96,12 +96,12 @@ pub fn programmer_panel_docked(
     // ── Intensity ─────────────────────────────────────────────────────────────
     widgets::section_header(ui, "Intensity", Some("0–100%"));
     ui.horizontal(|ui| {
-        ui.add_space((available_width - 80.0) * 0.5);
+        ui.add_space(((available_width - 80.0) * 0.5).max(0.0));
         let mut dimmer_pct = prog.dimmer;
         ui.add(widgets::Fader::new(&mut dimmer_pct, "Dimmer").unit("%"));
         prog.dimmer = dimmer_pct;
         ui.add_space(24.0);
-        let mut strobe_norm = prog.strobe;
+        let strobe_norm = prog.strobe;
         let mut strobe_pct = strobe_norm * 100.0;
         ui.add(widgets::Fader::new(&mut strobe_pct, "Strobe").unit("Hz").accent(WARNING));
         if strobe_pct < 1.0 {
@@ -116,7 +116,7 @@ pub fn programmer_panel_docked(
     // ── Position ──────────────────────────────────────────────────────────────
     widgets::section_header(ui, "Position", Some("±270° / ±135°"));
     ui.horizontal(|ui| {
-        ui.add_space((available_width - 250.0) * 0.5);
+        ui.add_space(((available_width - 250.0) * 0.5).max(0.0));
         let pan_deg = (prog.pan - 0.5) * prog.pan_range;
         let mut pan_val = pan_deg;
         ui.add(widgets::Encoder::new(&mut pan_val, "Pan").range(-270.0, 270.0).decimals(1).unit("°").sub("ABS"));
@@ -203,7 +203,7 @@ pub fn programmer_panel_docked(
             egui::Vec2::new(40.0, 22.0),
         );
         let mut pick_clicked = false;
-        ui.allocate_ui_at_rect(pick_rect, |ui| {
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(pick_rect), |ui| {
             if ui.add_sized([40.0, 22.0], egui::Button::new(RichText::new("PICK").size(9.0).color(FG_SECONDARY)).fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).clicked() {
                 pick_clicked = true;
             }
@@ -218,7 +218,7 @@ pub fn programmer_panel_docked(
     let colors = color_presets;
 
     let mut selected_swatch = None;
-    for (i, (name, color)) in colors.iter().enumerate() {
+    for (i, (_name, _color)) in colors.iter().enumerate() {
         if i % 8 == 0 {
             ui.horizontal(|ui| {
                 for j in 0..8 {
@@ -245,7 +245,7 @@ pub fn programmer_panel_docked(
     widgets::section_header(ui, "Gobo", Some("wheel 1 · 4 slots"));
     let gobos = [("Open", 0), ("Dots", 1), ("Breakup", 2), ("Star", 3)];
     ui.horizontal(|ui| {
-        ui.add_space((available_width - 200.0) * 0.5);
+        ui.add_space(((available_width - 200.0) * 0.5).max(0.0));
         for (name, idx) in gobos {
             let selected = prog.gobo_index == idx;
             let size = Vec2::new(available_width.min(200.0) / 4.0 - 4.0, available_width.min(200.0) / 4.0 - 4.0);
@@ -305,7 +305,7 @@ pub fn programmer_panel_docked(
     // Spin slider
     ui.horizontal(|ui| {
         ui.label(RichText::new("Spin").size(10.0).color(FG_MUTED).strong());
-        let slider_width = available_width - 120.0;
+        let slider_width = (available_width - 120.0).max(0.0);
         let (rect, response) = ui.allocate_exact_size(Vec2::new(slider_width, 12.0), Sense::drag());
         if response.dragged() {
             let delta = response.drag_delta().x;
@@ -363,7 +363,7 @@ pub fn programmer_panel_docked(
 
     // Hotkey hint
     ui.horizontal(|ui| {
-        ui.add_space((available_width - 300.0) * 0.5);
+        ui.add_space(((available_width - 300.0) * 0.5).max(0.0));
         ui.label(
             RichText::new("←↑→↓ pan/tilt  ·  +/− dimmer  ·  Z zoom  ·  W/X/C colour")
                 .size(9.0)
