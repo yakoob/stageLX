@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>stageLX — UI Redesign</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="tokens.css" />
+<style>
+  html, body { width: 100%; height: 100%; background: var(--bg-app); }
+  /* Notes column on each artboard */
+  .ab-notes {
+    position: absolute;
+    top: 0; right: -260px;
+    width: 240px;
+    color: var(--fg-secondary);
+    font-size: 11px;
+    line-height: 1.55;
+    padding-top: 4px;
+  }
+  .ab-notes h4 {
+    margin: 0 0 6px 0;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+  }
+  .ab-notes p { margin: 0 0 10px 0; }
+  .ab-notes code { font-family: var(--font-mono); font-size: 10px; color: var(--fg); background: var(--bg-raised); padding: 0 4px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="../design-canvas.jsx"></script>
+<script type="text/babel" src="atoms.jsx"></script>
+<script type="text/babel" src="programmer.jsx"></script>
+<script type="text/babel" src="patch.jsx"></script>
+<script type="text/babel" src="library.jsx"></script>
+<script type="text/babel" src="io.jsx"></script>
+<script type="text/babel" src="layout.jsx"></script>
+
+<script type="text/babel">
+const { DesignCanvas, DCSection, DCArtboard } = window;
+const { ProgrammerPanel, PatchPanel, LibraryPanel, IoPanelView, FullLayout } = window;
+
+// Wrapper that gives an artboard a dark console background + padding
+const Frame = ({ children, padding = 24, bg = "var(--bg-app)" }) => (
+  <div style={{
+    width: "100%", height: "100%",
+    background: bg,
+    padding,
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "flex-start",
+    overflow: "hidden",
+  }}>
+    {children}
+  </div>
+);
+
+const Notes = ({ title, children }) => (
+  <div className="ab-notes">
+    <h4>{title}</h4>
+    {children}
+  </div>
+);
+
+function App() {
+  return (
+    <DesignCanvas
+      title="stageLX — UI Redesign"
+      subtitle="Component-level redesign · dark console aesthetic · IBM Plex"
+      background="var(--bg-app)"
+    >
+      {/* ── Section: Full layout ───────────────────────────────────── */}
+      <DCSection id="layout" title="Hybrid dock — full application layout">
+        <DCArtboard id="full" label="Hybrid dock · 1440 × 880" width={1440} height={880}>
+          <FullLayout />
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── Section: Programmer ─────────────────────────────────────── */}
+      <DCSection id="programmer" title="Programmer — the main control surface">
+        <DCArtboard id="prog" label="Programmer panel · standalone" width={680} height={780}>
+          <Frame>
+            <ProgrammerPanel />
+            <Notes title="Design notes">
+              <p><b style={{ color: "var(--fg)" }}>Encoders</b> for Pan/Tilt/Zoom — circular dials with the value baked into the centre, matching the muscle memory of grandMA / Hog / Eos style consoles.</p>
+              <p><b style={{ color: "var(--fg)" }}>Faders</b> for Dimmer + Strobe — the two attributes operators reach for fastest. Strobe uses the amber accent.</p>
+              <p><b style={{ color: "var(--fg)" }}>Selection bar</b> at top makes it always-clear which fixtures the programmer is acting on.</p>
+              <p><b style={{ color: "var(--fg)" }}>Hotkey strip</b> moves the discoverable keys from a label string into a quiet footer.</p>
+            </Notes>
+          </Frame>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── Section: Patch ─────────────────────────────────────────── */}
+      <DCSection id="patch" title="Patch — fixture list + add-fixture form">
+        <DCArtboard id="patch" label="Patch panel · standalone" width={900} height={680}>
+          <Frame>
+            <PatchPanel />
+            <Notes title="Design notes">
+              <p><b style={{ color: "var(--fg)" }}>U.C address format</b> — <code>1.001</code> reads as one token. Universe + channel split is preserved on the add-fixture form.</p>
+              <p><b style={{ color: "var(--fg)" }}>22px dense rows</b> with a 2px accent gutter for the selected fixture. Live state is the leading dot.</p>
+              <p><b style={{ color: "var(--fg)" }}>Filter + quick chips</b> replace egui's bare grid header — All / Live / U1 / U2 are the most-used filters.</p>
+              <p><b style={{ color: "var(--fg)" }}>Add-fixture form</b> previews <code>NEXT FREE</code> address so operators don't fight collisions.</p>
+            </Notes>
+          </Frame>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── Section: Library ───────────────────────────────────────── */}
+      <DCSection id="library" title="Library — GDTF, MVR, Venue">
+        <DCArtboard id="lib" label="Library panel · standalone" width={760} height={680}>
+          <Frame>
+            <LibraryPanel />
+            <Notes title="Design notes">
+              <p><b style={{ color: "var(--fg)" }}>Three sub-tabs</b> (Fixtures / MVR / Venue) instead of three concatenated sections. Each has a single clear input zone.</p>
+              <p><b style={{ color: "var(--fg)" }}>Used count</b> next to each fixture type tells you which library entries are actually patched.</p>
+              <p><b style={{ color: "var(--fg)" }}>Drop-zone affordance</b> replaces the "type a path" text input — drag from Finder or click Browse. Path string is still parsed if pasted.</p>
+              <p><b style={{ color: "var(--fg)" }}>Loaded asset</b> on MVR / Venue tabs surfaces what's currently in memory rather than just an importer.</p>
+            </Notes>
+          </Frame>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── Section: I/O ───────────────────────────────────────────── */}
+      <DCSection id="io" title="DMX I/O — Art-Net / sACN / USB / MIDI / OSC">
+        <DCArtboard id="io" label="I/O panel · standalone" width={680} height={680}>
+          <Frame>
+            <IoPanelView />
+            <Notes title="Design notes">
+              <p><b style={{ color: "var(--fg)" }}>Protocol strip</b> at the top — five colored dots show health at a glance, click to switch the config view.</p>
+              <p><b style={{ color: "var(--fg)" }}>One protocol visible at a time</b> instead of all five stacked. Reduces panel height by ~70%.</p>
+              <p><b style={{ color: "var(--fg)" }}>TX/RX counters</b> get real visual hierarchy at the bottom — two big mono numbers, not <code>TX 0  RX 0</code>.</p>
+              <p><b style={{ color: "var(--fg)" }}>Status banners</b> (live / warning) replace plain colored labels — the "port busy" warning has its own amber surface.</p>
+            </Notes>
+          </Frame>
+        </DCArtboard>
+      </DCSection>
+
+      {/* ── Section: Tokens ─────────────────────────────────────────── */}
+      <DCSection id="tokens" title="Design tokens">
+        <DCArtboard id="tokens" label="Palette · type · controls" width={1100} height={620}>
+          <TokensSheet />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+function TokensSheet() {
+  const surfaces = [
+    ["bg-app",        "oklch(0.135 0.004 240)"],
+    ["bg-chrome",     "oklch(0.165 0.004 240)"],
+    ["bg-panel",      "oklch(0.190 0.005 240)"],
+    ["bg-raised",     "oklch(0.225 0.005 240)"],
+    ["bg-input",      "oklch(0.150 0.004 240)"],
+    ["border",        "oklch(0.295 0.005 240)"],
+    ["border-strong", "oklch(0.385 0.005 240)"],
+  ];
+  const text = [
+    ["fg",           "oklch(0.940 0.005 240)"],
+    ["fg-secondary", "oklch(0.700 0.005 240)"],
+    ["fg-muted",     "oklch(0.520 0.005 240)"],
+    ["fg-faint",     "oklch(0.400 0.005 240)"],
+  ];
+  const accents = [
+    ["accent (primary)",  "oklch(0.78 0.13 215)"],
+    ["warning",           "oklch(0.80 0.12 80)"],
+    ["error",             "oklch(0.66 0.18 28)"],
+    ["rx (live)",         "oklch(0.80 0.13 150)"],
+    ["tx",                "oklch(0.78 0.13 215)"],
+    ["idle",              "oklch(0.50 0.005 240)"],
+  ];
+
+  return (
+    <div style={{ width: "100%", height: "100%", padding: 28, background: "var(--bg-app)", color: "var(--fg)", overflow: "auto" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 28 }}>
+        <Block title="Surfaces">
+          {surfaces.map(([n, v]) => <SwatchRow key={n} name={n} value={v} />)}
+        </Block>
+        <Block title="Text">
+          {text.map(([n, v]) => <SwatchRow key={n} name={n} value={v} />)}
+        </Block>
+        <Block title="Accents — primary + warning, semantic only" wide>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+            {accents.map(([n, v]) => <SwatchRow key={n} name={n} value={v} />)}
+          </div>
+        </Block>
+        <Block title="Type — IBM Plex Sans + Mono">
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <TypeRow size={32} weight={500} sample="stageLX" mono={false} note="32 / 500 · wordmark" />
+            <TypeRow size={18} weight={500} sample="74%" mono note="18 / 500 mono · encoder readout" />
+            <TypeRow size={13} weight={500} sample="Programmer" mono={false} note="13 / 500 · panel title" />
+            <TypeRow size={11} weight={500} sample="MAC Aura SL · 02" mono={false} note="11 / 500 · row label" />
+            <TypeRow size={11} weight={400} sample="1.017" mono note="11 / 400 mono · address" />
+            <TypeRow size={9}  weight={600} sample="POSITION" mono={false} note="9 / 600 · eyebrow (0.12em)" cap />
+          </div>
+        </Block>
+        <Block title="Controls" wide>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+            <button className="btn primary"><Atoms.Icon name="plus" /> Patch</button>
+            <button className="btn">Add</button>
+            <button className="btn small">Black</button>
+            <button className="btn ghost small">Reset</button>
+            <button className="btn small ghost icon"><Atoms.Icon name="trash" /></button>
+            <input className="input" placeholder="filter…" style={{ width: 160 }} />
+            <input className="input numeric" defaultValue="1.001" style={{ width: 80 }} />
+            <span className="pill live"><span className="dot live" />Art-Net</span>
+            <span className="pill"><span className="dot warn" />USB</span>
+            <span className="pill idle">MIDI</span>
+          </div>
+        </Block>
+      </div>
+    </div>
+  );
+}
+
+const Block = ({ title, children, wide }) => (
+  <div style={{ gridColumn: wide ? "1 / -1" : "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+    <span className="eyebrow">{title}</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>{children}</div>
+  </div>
+);
+
+const SwatchRow = ({ name, value }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 10, height: 28 }}>
+    <div style={{ width: 28, height: 18, borderRadius: 2, background: value, border: "1px solid var(--border)" }} />
+    <span style={{ fontSize: 11, color: "var(--fg)", flex: 1 }}>{name}</span>
+    <span className="mono" style={{ fontSize: 10, color: "var(--fg-muted)" }}>{value}</span>
+  </div>
+);
+
+const TypeRow = ({ size, weight, sample, mono, note, cap }) => (
+  <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+    <span style={{
+      fontSize: size, fontWeight: weight,
+      fontFamily: mono ? "var(--font-mono)" : "var(--font-sans)",
+      color: "var(--fg)",
+      minWidth: 200,
+      letterSpacing: cap ? "0.12em" : (size >= 18 ? "-0.02em" : "0"),
+      textTransform: cap ? "uppercase" : "none",
+    }}>{sample}</span>
+    <span className="mono" style={{ fontSize: 10, color: "var(--fg-muted)" }}>{note}</span>
+  </div>
+);
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

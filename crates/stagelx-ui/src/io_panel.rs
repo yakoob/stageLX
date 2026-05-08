@@ -1,189 +1,301 @@
-use bevy::prelude::ResMut;
-use bevy_egui::{egui, EguiContexts};
-use crate::IoConfig;
+use bevy::prelude::*;
+use bevy_egui::egui::{self, Color32, Pos2, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
 
-pub fn io_panel(mut ctx: EguiContexts, mut cfg: ResMut<IoConfig>) {
-    egui::Window::new("DMX I/O")
-        .default_pos([1300.0, 10.0])
-        .default_width(260.0)
-        .resizable(false)
-        .show(&ctx.ctx_mut().expect("egui context"), |ui| {
-            // ── Art-Net ───────────────────────────────────────────────────────
-            ui.label(
-                egui::RichText::new("ART-NET")
-                    .strong()
-                    .color(egui::Color32::from_rgb(120, 220, 255)),
-            );
+use crate::theme::*;
+use crate::widgets;
+use crate::{ActiveProtocol, IoConfig, IoPanelState};
 
+// Legacy entry point
+pub fn io_panel(mut _ctx: bevy_egui::EguiContexts, mut _cfg: ResMut<IoConfig>) {}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DMX I/O Panel (docked / inline)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub fn io_panel_docked(
+    ui: &mut Ui,
+    cfg: &mut IoConfig,
+    state: &mut IoPanelState,
+) {
+    let available_width = ui.available_width();
+    ui.set_min_width(available_width);
+
+    // ── Protocol strip ────────────────────────────────────────────────────────
+    {
+        let strip_height = 48.0;
+        let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, strip_height), Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter();
+            painter.rect_filled(rect, 3.0, BG_INPUT);
+            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+        }
+
+        ui.allocate_ui_at_rect(rect, |ui| {
             ui.horizontal(|ui| {
-                ui.label("Bind:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut cfg.artnet_ip)
-                        .hint_text("0.0.0.0")
-                        .desired_width(110.0),
-                );
+                let protocols = [
+                    ("Art-Net", ActiveProtocol::ArtNet),
+                    ("sACN", ActiveProtocol::Sacn),
+                    ("USB", ActiveProtocol::Usb),
+                    ("MIDI", ActiveProtocol::Midi),
+                    ("OSC", ActiveProtocol::Osc),
+                ];
+                let cell_width = available_width / 5.0 - 4.0;
+                for (label, proto) in protocols {
+                    let active = state.active_protocol == proto;
+                    let (cell_rect, response) = ui.allocate_exact_size(Vec2::new(cell_width, 40.0), Sense::click());
+                    if response.clicked() {
+                        state.active_protocol = proto;
+                    }
+                    if ui.is_rect_visible(cell_rect) {
+                        let painter = ui.painter();
+                        painter.rect_filled(cell_rect, 2.0, if active { BG_RAISED } else { Color32::TRANSPARENT });
+                        painter.rect_stroke(cell_rect, 2.0, Stroke::new(1.0, if active { ACCENT_DIM } else { Color32::TRANSPARENT }), StrokeKind::Middle);
+
+                        let status = match proto {
+                            ActiveProtocol::ArtNet => widgets::DotState::Live,
+                            ActiveProtocol::Sacn => widgets::DotState::Live,
+                            ActiveProtocol::Usb => widgets::DotState::Warn,
+                            ActiveProtocol::Midi => widgets::DotState::Idle,
+                            ActiveProtocol::Osc => widgets::DotState::Live,
+                        };
+                        let dot_y = cell_rect.min.y + 10.0;
+                        painter.circle_filled(Pos2::new(cell_rect.center().x, dot_y), 3.0, status.color());
+                        if let Some(glow) = status.glow() {
+                            painter.circle_filled(Pos2::new(cell_rect.center().x, dot_y), 6.0, glow);
+                        }
+
+                        painter.text(
+                            Pos2::new(cell_rect.center().x, cell_rect.max.y - 8.0),
+                            egui::Align2::CENTER_CENTER,
+                            label,
+                            egui::TextStyle::Body.resolve(ui.style()),
+                            if active { FG } else { FG_SECONDARY },
+                        );
+                    }
+                    ui.add_space(4.0);
+                }
             });
+        });
+    }
+    ui.add_space(10.0);
+
+    // ── Active protocol config ────────────────────────────────────────────────
+    match state.active_protocol {
+        ActiveProtocol::ArtNet => artnet_config(ui, cfg),
+        ActiveProtocol::Sacn => sacn_config(ui, cfg),
+        ActiveProtocol::Usb => usb_config(ui, cfg),
+        ActiveProtocol::Midi => midi_config(ui, cfg),
+        ActiveProtocol::Osc => osc_config(ui, cfg),
+    }
+
+    // ── TX/RX counters ────────────────────────────────────────────────────────
+    ui.add_space(12.0);
+    {
+        let card_height = 72.0;
+        let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, card_height), Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter();
+            painter.rect_filled(rect, 3.0, BG_CHROME);
+            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+        }
+
+        ui.allocate_ui_at_rect(rect, |ui| {
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label("Dest:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut cfg.artnet_dest_ip)
-                        .hint_text("255.255.255.255")
-                        .desired_width(110.0),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Universe:");
-                ui.add(egui::DragValue::new(&mut cfg.artnet_out_universe).range(0_u16..=32767_u16));
-            });
-
-            ui.checkbox(&mut cfg.artnet_rx_enabled, "Enable RX");
-            ui.horizontal(|ui| {
-                ui.label("Allow src:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut cfg.artnet_allowed_sources)
-                        .hint_text("any  (e.g. 192.168.1.10,192.168.1.11)")
-                        .desired_width(180.0),
-                );
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&cfg.artnet_status).small().color(egui::Color32::LIGHT_GRAY));
-            });
-            ui.monospace(format!("TX {}  RX {}", cfg.artnet_tx_count, cfg.artnet_rx_count));
-
-            ui.add_space(6.0);
-            ui.separator();
-
-            // ── sACN (E1.31) ──────────────────────────────────────────────────
-            ui.label(
-                egui::RichText::new("sACN  (E1.31)")
-                    .strong()
-                    .color(egui::Color32::from_rgb(180, 255, 180)),
-            );
-
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut cfg.sacn_tx_enabled, "TX");
-                ui.checkbox(&mut cfg.sacn_rx_enabled, "RX");
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Universe:");
-                ui.add(egui::DragValue::new(&mut cfg.sacn_out_universe).range(1_u16..=63999_u16));
-                ui.label("Pri:");
-                ui.add(egui::DragValue::new(&mut cfg.sacn_priority).range(1_u8..=200_u8));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Dest:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut cfg.sacn_dest_ip)
-                        .hint_text("239.255.X.X (multicast)")
-                        .desired_width(160.0),
-                );
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&cfg.sacn_status).small().color(egui::Color32::LIGHT_GRAY));
-            });
-            ui.monospace(format!("TX {}  RX {}", cfg.sacn_tx_count, cfg.sacn_rx_count));
-
-            ui.add_space(6.0);
-            ui.separator();
-
-            // ── USB DMX (Enttec USB Pro) ───────────────────────────────────────
-            ui.label(
-                egui::RichText::new("USB DMX  (Enttec)")
-                    .strong()
-                    .color(egui::Color32::from_rgb(255, 220, 100)),
-            );
-
-            ui.checkbox(&mut cfg.usb_tx_enabled, "Enable TX");
-
-            ui.horizontal(|ui| {
-                ui.label("Port:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut cfg.usb_port)
-                        .hint_text("/dev/tty.usbserial-… or COM3")
-                        .desired_width(170.0),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("Universe:");
-                ui.add(egui::DragValue::new(&mut cfg.usb_universe).range(1_u16..=32767_u16));
-            });
-
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&cfg.usb_status).small().color(egui::Color32::LIGHT_GRAY));
-            });
-            ui.monospace(format!("TX {}", cfg.usb_tx_count));
-
-            ui.add_space(6.0);
-            ui.separator();
-
-            // ── MIDI Input ────────────────────────────────────────────────────
-            ui.label(
-                egui::RichText::new("MIDI Input")
-                    .strong()
-                    .color(egui::Color32::from_rgb(255, 180, 100)),
-            );
-
-            ui.checkbox(&mut cfg.midi_enabled, "Enable");
-            ui.horizontal(|ui| {
-                ui.label("Port:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut cfg.midi_port)
-                        .hint_text("Exact port name…")
-                        .desired_width(160.0),
-                );
-            });
-
-            ui.label(egui::RichText::new("CC Mapping").small().strong());
-            egui::Grid::new("midi_cc_grid")
-                .num_columns(4)
-                .spacing([6.0, 2.0])
-                .show(ui, |ui| {
-                    ui.label("Dimmer"); ui.add(egui::DragValue::new(&mut cfg.midi_cc_dimmer).range(0_u8..=127_u8));
-                    ui.label("Pan");    ui.add(egui::DragValue::new(&mut cfg.midi_cc_pan).range(0_u8..=127_u8));
-                    ui.end_row();
-                    ui.label("Tilt");   ui.add(egui::DragValue::new(&mut cfg.midi_cc_tilt).range(0_u8..=127_u8));
-                    ui.label("Zoom");   ui.add(egui::DragValue::new(&mut cfg.midi_cc_zoom).range(0_u8..=127_u8));
-                    ui.end_row();
-                    ui.label("Red");    ui.add(egui::DragValue::new(&mut cfg.midi_cc_red).range(0_u8..=127_u8));
-                    ui.label("Green");  ui.add(egui::DragValue::new(&mut cfg.midi_cc_green).range(0_u8..=127_u8));
-                    ui.end_row();
-                    ui.label("Blue");   ui.add(egui::DragValue::new(&mut cfg.midi_cc_blue).range(0_u8..=127_u8));
-                    ui.label("Strobe"); ui.add(egui::DragValue::new(&mut cfg.midi_cc_strobe).range(0_u8..=127_u8));
-                    ui.end_row();
+                let col_width = (available_width - 16.0) / 2.0;
+                // TX
+                ui.allocate_ui_with_layout(Vec2::new(col_width, 56.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    ui.horizontal(|ui| {
+                        widgets::status_dot(ui, widgets::DotState::Tx);
+                        ui.label(RichText::new("TX").size(9.0).strong().color(FG_MUTED).monospace());
+                    });
+                    ui.label(RichText::new(format!("{}", cfg.artnet_tx_count)).size(16.0).monospace().color(FG));
+                    ui.label(RichText::new("packets/s").size(9.0).monospace().color(FG_FAINT));
                 });
 
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&cfg.midi_status).small().color(egui::Color32::LIGHT_GRAY));
+                // RX
+                ui.allocate_ui_with_layout(Vec2::new(col_width, 56.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                    ui.horizontal(|ui| {
+                        widgets::status_dot(ui, widgets::DotState::Live);
+                        ui.label(RichText::new("RX").size(9.0).strong().color(FG_MUTED).monospace());
+                    });
+                    ui.label(RichText::new(format!("{}", cfg.artnet_rx_count)).size(16.0).monospace().color(FG));
+                    ui.label(RichText::new("packets/s").size(9.0).monospace().color(FG_FAINT));
+                });
             });
-            ui.monospace(format!("RX {}", cfg.midi_rx_count));
-
-            ui.add_space(6.0);
-            ui.separator();
-
-            // ── OSC Input ─────────────────────────────────────────────────────
-            ui.label(
-                egui::RichText::new("OSC Input  (UDP)")
-                    .strong()
-                    .color(egui::Color32::from_rgb(180, 255, 120)),
-            );
-
-            ui.checkbox(&mut cfg.osc_enabled, "Enable");
-            ui.horizontal(|ui| {
-                ui.label("Port:");
-                ui.add(egui::DragValue::new(&mut cfg.osc_port).range(1024_u16..=65535_u16));
-            });
-            ui.label(
-                egui::RichText::new("/fixture/{id}/{attr}  f32")
-                    .small()
-                    .color(egui::Color32::GRAY),
-            );
-
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&cfg.osc_status).small().color(egui::Color32::LIGHT_GRAY));
-            });
-            ui.monospace(format!("RX {}", cfg.osc_rx_count));
         });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Per-protocol configs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn config_row(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.add_space(0.0);
+        ui.allocate_ui_with_layout(Vec2::new(76.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(RichText::new(label.to_uppercase()).size(10.0).strong().color(FG_MUTED));
+        });
+        ui.add_space(8.0);
+        content(ui);
+    });
+    ui.add_space(6.0);
+}
+
+fn artnet_config(ui: &mut Ui, cfg: &mut IoConfig) {
+    config_row(ui, "Bind", |ui| {
+        ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.artnet_ip).hint_text("0.0.0.0").text_color(FG));
+    });
+    config_row(ui, "Dest", |ui| {
+        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.artnet_dest_ip).hint_text("255.255.255.255").text_color(FG));
+    });
+    config_row(ui, "Universe", |ui| {
+        ui.add(egui::DragValue::new(&mut cfg.artnet_out_universe).range(0_u16..=32767_u16));
+        ui.label(RichText::new("0–32767").size(10.0).monospace().color(FG_FAINT));
+    });
+    config_row(ui, "Receive", |ui| {
+        ui.horizontal(|ui| {
+            let mut rx = cfg.artnet_rx_enabled;
+            widgets::toggle(ui, &mut rx, "RX");
+            cfg.artnet_rx_enabled = rx;
+            ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.artnet_allowed_sources).hint_text("any").text_color(FG));
+        });
+    });
+
+    // Live banner
+    widgets::banner(ui, widgets::DotState::Live, &format!("bound {}:6454 · 2 nodes seen", cfg.artnet_ip));
+}
+
+fn sacn_config(ui: &mut Ui, cfg: &mut IoConfig) {
+    config_row(ui, "Mode", |ui| {
+        let mut tx = cfg.sacn_tx_enabled;
+        let mut rx = cfg.sacn_rx_enabled;
+        widgets::toggle(ui, &mut tx, "TX");
+        cfg.sacn_tx_enabled = tx;
+        ui.add_space(4.0);
+        widgets::toggle(ui, &mut rx, "RX");
+        cfg.sacn_rx_enabled = rx;
+    });
+    config_row(ui, "Universe", |ui| {
+        ui.add(egui::DragValue::new(&mut cfg.sacn_out_universe).range(1_u16..=63999_u16));
+        ui.label(RichText::new("1–63999").size(10.0).monospace().color(FG_FAINT));
+    });
+    config_row(ui, "Priority", |ui| {
+        ui.add(egui::DragValue::new(&mut cfg.sacn_priority).range(1_u8..=200_u8));
+    });
+    config_row(ui, "Dest", |ui| {
+        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.sacn_dest_ip).hint_text("239.255.X.X").text_color(FG));
+        ui.label(RichText::new("multicast").size(10.0).monospace().color(FG_FAINT));
+    });
+}
+
+fn usb_config(ui: &mut Ui, cfg: &mut IoConfig) {
+    config_row(ui, "State", |ui| {
+        let mut en = cfg.usb_tx_enabled;
+        widgets::toggle(ui, &mut en, "TX ENABLED");
+        cfg.usb_tx_enabled = en;
+    });
+    config_row(ui, "Port", |ui| {
+        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.usb_port).hint_text("/dev/tty.usbserial-…").text_color(FG));
+    });
+    config_row(ui, "Universe", |ui| {
+        ui.add(egui::DragValue::new(&mut cfg.usb_universe).range(1_u16..=32767_u16));
+    });
+
+    // Warning banner (placeholder)
+    widgets::banner(ui, widgets::DotState::Warn, "port busy — close other apps using this device");
+}
+
+fn midi_config(ui: &mut Ui, cfg: &mut IoConfig) {
+    config_row(ui, "State", |ui| {
+        let mut en = cfg.midi_enabled;
+        widgets::toggle(ui, &mut en, "ENABLE");
+        cfg.midi_enabled = en;
+    });
+    config_row(ui, "Port", |ui| {
+        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.midi_port).hint_text("select MIDI input…").text_color(FG));
+    });
+
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        widgets::eyebrow_widget(ui, "CC Mapping");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add_sized([60.0, 20.0], egui::Button::new(RichText::new("Learn").color(FG_SECONDARY)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+                // TODO: MIDI learn
+            }
+        });
+    });
+    ui.add_space(6.0);
+
+    let mut ccs = [
+        ("Dimmer", &mut cfg.midi_cc_dimmer),
+        ("Pan", &mut cfg.midi_cc_pan),
+        ("Tilt", &mut cfg.midi_cc_tilt),
+        ("Zoom", &mut cfg.midi_cc_zoom),
+        ("Red", &mut cfg.midi_cc_red),
+        ("Green", &mut cfg.midi_cc_green),
+        ("Blue", &mut cfg.midi_cc_blue),
+        ("Strobe", &mut cfg.midi_cc_strobe),
+    ];
+
+    ui.columns(2, |cols| {
+        for (i, (label, val)) in ccs.iter_mut().enumerate() {
+            let col = if i % 2 == 0 { &mut cols[0] } else { &mut cols[1] };
+            col.horizontal(|ui| {
+                let row_width = ui.available_width();
+                let (rect, _response) = ui.allocate_exact_size(Vec2::new(row_width, 24.0), Sense::hover());
+                if ui.is_rect_visible(rect) {
+                    let painter = ui.painter();
+                    painter.rect_filled(rect, 2.0, BG_INPUT);
+                    painter.rect_stroke(rect, 2.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+                    painter.text(
+                        Pos2::new(rect.min.x + 8.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        *label,
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        FG_SECONDARY,
+                    );
+                    painter.text(
+                        Pos2::new(rect.max.x - 8.0, rect.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        &format!("CC {:03}", **val),
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        FG,
+                    );
+                }
+            });
+            col.add_space(4.0);
+        }
+    });
+}
+
+fn osc_config(ui: &mut Ui, cfg: &mut IoConfig) {
+    config_row(ui, "State", |ui| {
+        let mut en = cfg.osc_enabled;
+        widgets::toggle(ui, &mut en, "LISTENING");
+        cfg.osc_enabled = en;
+    });
+    config_row(ui, "Port", |ui| {
+        ui.add(egui::DragValue::new(&mut cfg.osc_port).range(1024_u16..=65535_u16));
+    });
+
+    ui.add_space(8.0);
+    {
+        let card_height = 60.0;
+        let available_width = ui.available_width();
+        let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, card_height), Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter();
+            painter.rect_filled(rect, 3.0, BG_INPUT);
+            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+        }
+        ui.allocate_ui_at_rect(rect, |ui| {
+            ui.add_space(8.0);
+            widgets::eyebrow_widget(ui, "Address Pattern");
+            ui.add_space(4.0);
+            ui.label(RichText::new("/fixture/{id}/{attr}").size(11.0).monospace().color(ACCENT));
+            ui.label(RichText::new("f32 · 0.0–1.0 normalised").size(9.0).monospace().color(FG_MUTED));
+        });
+    }
 }
