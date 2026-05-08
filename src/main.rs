@@ -10,6 +10,11 @@ fn main() {
             primary_window: Some(Window {
                 title: "stageLX — Phase 5".into(),
                 resolution: (1600_u32, 900_u32).into(),
+                resize_constraints: WindowResizeConstraints {
+                    min_width: 720.0,
+                    min_height: 480.0,
+                    ..default()
+                },
                 ..default()
             }),
             ..default()
