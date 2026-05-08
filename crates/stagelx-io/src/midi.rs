@@ -15,27 +15,39 @@ pub struct MidiState {
     pub connection: Option<midir::MidiInputConnection<()>>,
     pub rx: Receiver<[u8; 3]>,
     tx: Sender<[u8; 3]>,
-    /// Cached list of available port names, refreshed each frame.
+    /// Cached list of available port names, refreshed at most 1 Hz.
     pub port_names: Vec<String>,
+    /// Last time port names were scanned (seconds).
+    last_scan_time: f32,
 }
 
 impl Default for MidiState {
     fn default() -> Self {
         let (tx, rx) = bounded(256);
-        Self { connection: None, rx, tx, port_names: Vec::new() }
+        Self { connection: None, rx, tx, port_names: Vec::new(), last_scan_time: 0.0 }
     }
 }
 
 // ─── Systems ──────────────────────────────────────────────────────────────────
 
 /// Refresh the port list and open/close the connection based on IoConfig.
-pub fn midi_manage_connection(mut state: NonSendMut<MidiState>, mut cfg: ResMut<IoConfig>) {
-    // Refresh port names (requires a throw-away MidiInput — the API is consuming).
-    if let Ok(mi) = MidiInput::new("stageLX-scan") {
-        let ports = mi.ports();
-        state.port_names = ports.iter()
-            .filter_map(|p| mi.port_name(p).ok())
-            .collect();
+/// Port scanning is rate-limited to ≤ 1 Hz (Rule 15).
+pub fn midi_manage_connection(
+    mut state: NonSendMut<MidiState>,
+    mut cfg: ResMut<IoConfig>,
+    time: Res<Time>,
+) {
+    // Rate-limit port scan to 1 Hz.
+    let now = time.elapsed_secs();
+    if now - state.last_scan_time >= 1.0 {
+        state.last_scan_time = now;
+        // Refresh port names (requires a throw-away MidiInput — the API is consuming).
+        if let Ok(mi) = MidiInput::new("stageLX-scan") {
+            let ports = mi.ports();
+            state.port_names = ports.iter()
+                .filter_map(|p| mi.port_name(p).ok())
+                .collect();
+        }
     }
 
     let want_open = cfg.midi_enabled && !cfg.midi_port.trim().is_empty();

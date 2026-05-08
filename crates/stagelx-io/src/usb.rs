@@ -11,6 +11,7 @@
 use std::io::Write;
 use bevy::prelude::*;
 use serialport::SerialPort;
+use stagelx_dmx::engine::DmxEngineRes;
 use stagelx_state::IoConfig;
 
 pub const ENTTEC_BAUD: u32 = 250_000;
@@ -69,7 +70,7 @@ pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, mut cfg: ResMut<IoC
 /// Runs in `FixedUpdate` at 44 Hz alongside Art-Net / sACN output.
 pub fn usb_send(
     mut state: NonSendMut<UsbDmxState>,
-    engine: Res<crate::artnet::DmxEngineRes>,
+    engine: Res<DmxEngineRes>,
     mut cfg: ResMut<IoConfig>,
 ) {
     if !cfg.usb_tx_enabled {

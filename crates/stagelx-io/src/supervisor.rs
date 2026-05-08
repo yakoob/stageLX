@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -31,10 +33,19 @@ pub trait IoSink: Send + 'static {
 /// New transports (MIDI, OSC, future) must register with this supervisor
 /// rather than managing threads ad-hoc. Existing transports (Art-Net, sACN,
 /// USB) will migrate to this in Phase 6.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct IoSupervisor {
     /// Total messages dropped due to full channels across all sources.
-    pub rx_drops: u64,
+    pub rx_drops: Arc<AtomicU64>,
     /// Total messages dropped due to full channels across all sinks.
-    pub tx_drops: u64,
+    pub tx_drops: Arc<AtomicU64>,
+}
+
+impl Default for IoSupervisor {
+    fn default() -> Self {
+        Self {
+            rx_drops: Arc::new(AtomicU64::new(0)),
+            tx_drops: Arc::new(AtomicU64::new(0)),
+        }
+    }
 }

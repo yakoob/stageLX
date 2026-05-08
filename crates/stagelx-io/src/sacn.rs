@@ -10,12 +10,16 @@
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    sync::atomic::{AtomicU64, Ordering},
     sync::Arc,
 };
 
 use bevy::prelude::*;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use stagelx_dmx::engine::DmxEngineRes;
 use stagelx_state::IoConfig;
+
+use crate::supervisor::IoSupervisor;
 
 pub const SACN_PORT: u16 = 5568;
 const MAX_RX_UNIVERSES: usize = 64;
@@ -124,7 +128,8 @@ pub struct ReceivedSacnPacket {
     pub universe: u16,
     pub priority: u8,
     pub source: IpAddr,
-    pub data: Arc<Vec<u8>>,
+    /// Fixed-size DMX data — avoids heap allocation on the UDP hot path.
+    pub data: [u8; 512],
 }
 
 // ─── Bevy Resource ────────────────────────────────────────────────────────────
@@ -135,6 +140,8 @@ pub struct SacnState {
     pub rx_chan: Option<Receiver<ReceivedSacnPacket>>,
     rx_thread_tx: Option<Sender<ReceivedSacnPacket>>,
     sequence: u8,
+    /// Shared drop counter incremented by the RX thread when the channel is full.
+    pub rx_drops: Arc<AtomicU64>,
 }
 
 impl Default for SacnState {
@@ -144,6 +151,7 @@ impl Default for SacnState {
             rx_chan: None,
             rx_thread_tx: None,
             sequence: 0,
+            rx_drops: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -151,7 +159,11 @@ impl Default for SacnState {
 // ─── Systems ──────────────────────────────────────────────────────────────────
 
 /// Manage sACN socket lifetime (port 5568, separate from Art-Net).
-pub fn sacn_manage_socket(mut state: ResMut<SacnState>, cfg: Res<IoConfig>) {
+pub fn sacn_manage_socket(
+    mut state: ResMut<SacnState>,
+    cfg: Res<IoConfig>,
+    supervisor: Res<IoSupervisor>,
+) {
     let wants_io = cfg.sacn_tx_enabled || cfg.sacn_rx_enabled;
 
     if wants_io && state.socket.is_none() {
@@ -176,6 +188,7 @@ pub fn sacn_manage_socket(mut state: ResMut<SacnState>, cfg: Res<IoConfig>) {
                     let (tx, rx) = bounded::<ReceivedSacnPacket>(8);
                     state.rx_chan = Some(rx);
                     state.rx_thread_tx = Some(tx.clone());
+                    let drops = state.rx_drops.clone();
 
                     std::thread::spawn(move || {
                         let mut buf = [0u8; 700];
@@ -185,14 +198,17 @@ pub fn sacn_manage_socket(mut state: ResMut<SacnState>, cfg: Res<IoConfig>) {
                                     if let Some((universe, priority, data)) =
                                         parse_sacn(&buf[..n])
                                     {
+                                        let mut pkt_data = [0u8; 512];
+                                        let len = data.len().min(512);
+                                        pkt_data[..len].copy_from_slice(&data[..len]);
                                         let pkt = ReceivedSacnPacket {
                                             universe,
                                             priority,
                                             source: src.ip(),
-                                            data: Arc::new(data.to_vec()),
+                                            data: pkt_data,
                                         };
-                                        if tx.send(pkt).is_err() {
-                                            break;
+                                        if let Err(TrySendError::Full(_)) = tx.try_send(pkt) {
+                                            drops.fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                 }
@@ -218,12 +234,19 @@ pub fn sacn_manage_socket(mut state: ResMut<SacnState>, cfg: Res<IoConfig>) {
     if !wants_io {
         state.socket = None;
     }
+
+    // Sync thread-local drops into the supervisor.
+    let local_drops = state.rx_drops.load(Ordering::Relaxed);
+    let global = supervisor.rx_drops.load(Ordering::Relaxed);
+    if local_drops > global {
+        supervisor.rx_drops.store(local_drops, Ordering::Relaxed);
+    }
 }
 
 /// Drain incoming sACN packets into the DMX engine "sacn_in" source.
 pub fn sacn_receive(
     state: Res<SacnState>,
-    mut engine: ResMut<crate::artnet::DmxEngineRes>,
+    mut engine: ResMut<DmxEngineRes>,
     mut cfg: ResMut<IoConfig>,
 ) {
     let Some(rx) = &state.rx_chan else { return };
@@ -258,7 +281,7 @@ pub fn sacn_receive(
 /// Runs in FixedUpdate — no Instant throttle needed.
 pub fn sacn_send(
     mut state: ResMut<SacnState>,
-    engine: Res<crate::artnet::DmxEngineRes>,
+    engine: Res<DmxEngineRes>,
     mut cfg: ResMut<IoConfig>,
 ) {
     if !cfg.sacn_tx_enabled {

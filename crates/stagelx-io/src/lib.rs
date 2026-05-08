@@ -8,15 +8,17 @@ pub mod usb;
 
 use bevy::prelude::*;
 use artnet::{
-    ArtNetState, DmxEngineRes,
+    ArtNetState,
     artnet_manage_socket, artnet_receive, artnet_send,
-    dmx_engine_tick, programmer_to_dmx,
+    dmx_engine_tick,
 };
 use sacn::{SacnState, sacn_manage_socket, sacn_receive, sacn_send};
 use usb::{UsbDmxState, usb_manage_device, usb_send};
 use midi::{MidiState, midi_manage_connection, midi_receive};
 use osc::{OscState, osc_manage_socket, osc_receive};
-use stagelx_dmx::engine::DmxEngine;
+use supervisor::IoSupervisor;
+use stagelx_dmx::engine::DmxEngineRes;
+use stagelx_dmx::programmer_to_dmx;
 
 /// Art-Net, sACN, and USB DMX output rate.  E1.31 §6.6 recommends ≥ 44 Hz.
 const DMX_OUTPUT_HZ: f64 = 44.0;
@@ -25,10 +27,11 @@ pub struct IoPlugin;
 
 impl Plugin for IoPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(DmxEngineRes(DmxEngine::default()))
+        app.insert_resource(DmxEngineRes::default())
             .init_resource::<ArtNetState>()
             .init_resource::<SacnState>()
             .init_resource::<OscState>()
+            .init_resource::<IoSupervisor>()
             .insert_non_send_resource(UsbDmxState::default())
             .insert_non_send_resource(MidiState::default())
             .insert_resource(Time::<Fixed>::from_hz(DMX_OUTPUT_HZ))

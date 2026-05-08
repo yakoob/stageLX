@@ -1,13 +1,15 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    sync::atomic::{AtomicU64, Ordering},
     sync::Arc,
 };
 
 use bevy::prelude::*;
-use crossbeam_channel::{bounded, Receiver, Sender};
-use stagelx_dmx::engine::DmxEngine;
-use stagelx_gdtf::gdtf::DmxMode;
-use stagelx_state::{FixtureLibraryRes, IoConfig};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use stagelx_dmx::engine::DmxEngineRes;
+use stagelx_state::IoConfig;
+
+use crate::supervisor::IoSupervisor;
 
 pub const ARTNET_PORT: u16 = 6454;
 // Cap the number of universes accepted from any single Art-Net source to
@@ -64,13 +66,11 @@ fn parse_artdmx(buf: &[u8]) -> Option<(u16, &[u8])> {
 pub struct ReceivedPacket {
     pub universe: u16,
     pub source: IpAddr,
-    pub data: Arc<Vec<u8>>,
+    /// Fixed-size DMX data — avoids heap allocation on the UDP hot path.
+    pub data: [u8; 512],
 }
 
 // ─── Bevy Resources ───────────────────────────────────────────────────────────
-
-#[derive(Resource)]
-pub struct DmxEngineRes(pub DmxEngine);
 
 #[derive(Resource)]
 pub struct ArtNetState {
@@ -81,6 +81,8 @@ pub struct ArtNetState {
     /// the source string changes, avoiding a Vec allocation every frame.
     pub cached_allowlist: Vec<IpAddr>,
     cached_allowlist_src: String,
+    /// Shared drop counter incremented by the RX thread when the channel is full.
+    pub rx_drops: Arc<AtomicU64>,
 }
 
 impl Default for ArtNetState {
@@ -91,6 +93,7 @@ impl Default for ArtNetState {
             rx_thread_tx: None,
             cached_allowlist: Vec::new(),
             cached_allowlist_src: String::new(),
+            rx_drops: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -98,7 +101,11 @@ impl Default for ArtNetState {
 // ─── Systems ──────────────────────────────────────────────────────────────────
 
 /// Manage the UDP socket lifetime based on IoConfig.
-pub fn artnet_manage_socket(mut state: ResMut<ArtNetState>, cfg: Res<IoConfig>) {
+pub fn artnet_manage_socket(
+    mut state: ResMut<ArtNetState>,
+    cfg: Res<IoConfig>,
+    supervisor: Res<IoSupervisor>,
+) {
     if state.socket.is_none() {
         let bind_ip: IpAddr = cfg
             .artnet_ip
@@ -132,6 +139,7 @@ pub fn artnet_manage_socket(mut state: ResMut<ArtNetState>, cfg: Res<IoConfig>) 
                     let (tx, rx) = bounded::<ReceivedPacket>(8);
                     state.rx_chan = Some(rx);
                     state.rx_thread_tx = Some(tx.clone());
+                    let drops = state.rx_drops.clone();
 
                     std::thread::spawn(move || {
                         let mut buf = [0u8; 600];
@@ -139,13 +147,16 @@ pub fn artnet_manage_socket(mut state: ResMut<ArtNetState>, cfg: Res<IoConfig>) 
                             match rx_sock.recv_from(&mut buf) {
                                 Ok((n, src)) => {
                                     if let Some((universe, data)) = parse_artdmx(&buf[..n]) {
+                                        let mut pkt_data = [0u8; 512];
+                                        let len = data.len().min(512);
+                                        pkt_data[..len].copy_from_slice(&data[..len]);
                                         let pkt = ReceivedPacket {
                                             universe,
                                             source: src.ip(),
-                                            data: Arc::new(data.to_vec()),
+                                            data: pkt_data,
                                         };
-                                        if tx.send(pkt).is_err() {
-                                            break;
+                                        if let Err(TrySendError::Full(_)) = tx.try_send(pkt) {
+                                            drops.fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                 }
@@ -175,6 +186,13 @@ pub fn artnet_manage_socket(mut state: ResMut<ArtNetState>, cfg: Res<IoConfig>) 
             .filter_map(|s| s.trim().parse().ok())
             .collect();
         state.cached_allowlist_src.clone_from(&cfg.artnet_allowed_sources);
+    }
+
+    // Sync thread-local drops into the supervisor.
+    let local_drops = state.rx_drops.load(Ordering::Relaxed);
+    let global = supervisor.rx_drops.load(Ordering::Relaxed);
+    if local_drops > global {
+        supervisor.rx_drops.store(local_drops, Ordering::Relaxed);
     }
 }
 
@@ -221,88 +239,6 @@ pub fn artnet_receive(
         count += 1;
     }
     cfg.artnet_rx_count = cfg.artnet_rx_count.saturating_add(count);
-}
-
-/// Write normalised programmer state into the DMX engine's "programmer" source.
-/// Runs in FixedUpdate so it fires at the same rate as the protocol sends.
-pub fn programmer_to_dmx(
-    mut engine: ResMut<DmxEngineRes>,
-    programmer: Res<stagelx_state::Programmer>,
-    patch: Res<stagelx_state::PatchRes>,
-    library: Res<FixtureLibraryRes>,
-) {
-    let source = engine
-        .0
-        .get_or_add_source("programmer", 200, stagelx_dmx::merge::MergeStrategy::Ltp);
-
-    let dimmer_byte = (programmer.dimmer * 255.0) as u8;
-    let pan_raw     = (programmer.pan    * 65535.0) as u16;
-    let tilt_raw    = (programmer.tilt   * 65535.0) as u16;
-    let r = (programmer.color[0] * 255.0) as u8;
-    let g = (programmer.color[1] * 255.0) as u8;
-    let b = (programmer.color[2] * 255.0) as u8;
-
-    for inst in patch.0.fixtures() {
-        let base     = inst.address.channel;
-        let universe = inst.address.universe;
-        let buf      = source.universes.get_or_insert(universe);
-
-        // Use GDTF channel offsets when the fixture type is loaded; fall back to
-        // the generic 8-channel layout for unloaded or procedural fixtures.
-        let mode = library
-            .library
-            .get(&inst.fixture_type_id)
-            .and_then(|ft| ft.find_mode(&inst.dmx_mode));
-
-        if let Some(mode) = mode {
-            write_attr8(buf, base, mode, "Dimmer",     dimmer_byte);
-            write_attr16(buf, base, mode, "Pan",       pan_raw);
-            write_attr16(buf, base, mode, "Tilt",      tilt_raw);
-            write_attr8(buf, base, mode, "ColorAdd_R", r);
-            write_attr8(buf, base, mode, "ColorAdd_G", g);
-            write_attr8(buf, base, mode, "ColorAdd_B", b);
-        } else {
-            // Generic 8-ch: Dimmer | Pan MSB | Pan Fine | Tilt MSB | Tilt Fine | R | G | B
-            buf.set(base,     dimmer_byte);
-            buf.set(base + 1, (pan_raw >> 8) as u8);
-            buf.set(base + 2, (pan_raw & 0xFF) as u8);
-            buf.set(base + 3, (tilt_raw >> 8) as u8);
-            buf.set(base + 4, (tilt_raw & 0xFF) as u8);
-            buf.set(base + 5, r);
-            buf.set(base + 6, g);
-            buf.set(base + 7, b);
-        }
-    }
-}
-
-/// Write a single 8-bit attribute to the DMX buffer using the GDTF channel offset.
-fn write_attr8(
-    buf: &mut stagelx_core::universe::DmxBuffer,
-    base: u16,
-    mode: &DmxMode,
-    attr: &str,
-    value: u8,
-) {
-    if let Some(ch) = mode.channel_for(attr) {
-        buf.set(base + ch.offset - 1, value);
-    }
-}
-
-/// Write a 16-bit attribute (MSB + optional fine byte) using the GDTF channel offset.
-fn write_attr16(
-    buf: &mut stagelx_core::universe::DmxBuffer,
-    base: u16,
-    mode: &DmxMode,
-    attr: &str,
-    value: u16,
-) {
-    if let Some(ch) = mode.channel_for(attr) {
-        let idx = base + ch.offset - 1;
-        buf.set(idx, (value >> 8) as u8);
-        if ch.resolution >= 2 {
-            buf.set(idx + 1, (value & 0xFF) as u8);
-        }
-    }
 }
 
 /// Merge all DMX sources into the output universe set.

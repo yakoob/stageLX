@@ -11,6 +11,9 @@ use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rosc::{OscPacket, OscType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use stagelx_state::{IoConfig, Programmer};
 
 // ─── Incoming message ──────────────────────────────────────────────────────────
@@ -27,12 +30,16 @@ pub struct OscState {
     rx: Receiver<OscMsg>,
     tx: Sender<OscMsg>,
     pub bound_port: Option<u16>,
+    /// Clone of the socket held so we can shut it down when disabled.
+    socket: Option<Arc<UdpSocket>>,
+    /// Signal for the background thread to exit.
+    shutdown: Arc<AtomicBool>,
 }
 
 impl Default for OscState {
     fn default() -> Self {
         let (tx, rx) = bounded(256);
-        Self { rx, tx, bound_port: None }
+        Self { rx, tx, bound_port: None, socket: None, shutdown: Arc::new(AtomicBool::new(false)) }
     }
 }
 
@@ -46,15 +53,24 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), cfg.osc_port);
         match UdpSocket::bind(addr) {
             Ok(sock) => {
-                // Keep blocking in the thread; Bevy Update just drains the channel.
+                // Use a short read timeout so the thread can poll the shutdown flag.
+                sock.set_read_timeout(Some(Duration::from_millis(100))).ok();
+                let sock = Arc::new(sock);
                 let tx = state.tx.clone();
+                let thread_sock = Arc::clone(&sock);
+                let shutdown = Arc::clone(&state.shutdown);
                 std::thread::spawn(move || {
                     let mut buf = vec![0u8; 1536];
                     loop {
-                        match sock.recv(&mut buf) {
+                        match thread_sock.recv(&mut buf) {
                             Ok(n) => {
                                 if let Ok(pkt) = rosc::decoder::decode(&buf[..n]) {
                                     forward_packet(pkt, &tx);
+                                }
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                                if shutdown.load(Ordering::Relaxed) {
+                                    break;
                                 }
                             }
                             Err(_) => break,
@@ -64,6 +80,7 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
                 info!("OSC listening on {}", addr);
                 cfg.osc_status = format!("Listening :{}", cfg.osc_port);
                 state.bound_port = Some(cfg.osc_port);
+                state.socket = Some(sock);
             }
             Err(e) => {
                 cfg.osc_status = format!("Bind failed: {e}");
@@ -72,9 +89,11 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
     }
 
     if !want_open && state.bound_port.is_some() {
-        // We can't easily close the background thread's socket without Arc<UdpSocket>,
-        // so just mark as closed and let GC handle it when the resource is replaced.
+        // Signal the background thread to exit.
+        state.shutdown.store(true, Ordering::Relaxed);
+        state.socket = None;
         state.bound_port = None;
+        state.shutdown = Arc::new(AtomicBool::new(false));
         cfg.osc_status = "Closed".into();
     }
 }
@@ -82,7 +101,7 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
 fn forward_packet(pkt: OscPacket, tx: &Sender<OscMsg>) {
     match pkt {
         OscPacket::Message(m) => {
-            let _ = tx.send(OscMsg { addr: m.addr, args: m.args });
+            let _ = tx.try_send(OscMsg { addr: m.addr, args: m.args });
         }
         OscPacket::Bundle(b) => {
             for p in b.content {
