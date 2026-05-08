@@ -262,7 +262,7 @@ pub fn articulate_beams(
     programmer: Res<Programmer>,
     time: Res<Time>,
     mut beam_q: Query<
-        (&MeshMaterial3d<BeamMaterial>, &mut Transform, &GlobalTransform),
+        (&MeshMaterial3d<BeamMaterial>, &mut Transform, Ref<GlobalTransform>),
         (With<BeamCone>, Without<YokeJoint>, Without<HeadJoint>),
     >,
     mut sprite_q: Query<(&MeshMaterial3d<BeamSpriteMaterial>, &GlobalTransform), With<BeamSprite>>,
@@ -270,7 +270,17 @@ pub fn articulate_beams(
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
     mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
     gobo_library: Res<GoboLibrary>,
+    mut last_programmer: Local<Programmer>,
 ) {
+    // Determine whether programmer state has changed since last frame.
+    let programmer_changed = *last_programmer != *programmer;
+
+    // Strobe and gobo spin are time-driven and require per-frame updates even
+    // when the programmer resource itself hasn't changed.
+    let time_driven = programmer.strobe > 0.01 || programmer.gobo_spin > 0.0;
+    let needs_full_update = programmer_changed || time_driven;
+
+    // Pre-compute derived values once.
     let shutter_open = if programmer.strobe < 0.01 {
         true
     } else {
@@ -301,35 +311,50 @@ pub fn articulate_beams(
         .unwrap_or_else(|| gobo_library.handles[0].clone());
 
     for (handle, mut transform, global_tf) in &mut beam_q {
+        let transform_changed = global_tf.is_changed();
+        if !needs_full_update && !transform_changed {
+            continue;
+        }
+
         if let Some(mat) = beam_materials.get_mut(handle.id()) {
-            mat.color         = color;
-            mat.gobo_params   = gobo_params;
-            mat.gobo          = gobo_handle.clone();
-            mat.world_to_cone = global_tf.to_matrix().inverse();
-            mat.beam_params   = Vec4::new(
-                target_half_deg.to_radians(),
-                BEAM_HEIGHT,
-                2.0,
-                0.8,
-            );
-        }
-        transform.scale = Vec3::new(scale_xz, 1.0, scale_xz);
-    }
-
-    // Update sprite materials with same color/gobo.
-    for (sprite_handle, _global_tf) in &mut sprite_q {
-        if let Some(mat) = sprite_materials.get_mut(sprite_handle.id()) {
-            mat.color = color;
-            mat.sprite_params = Vec4::new(gobo_rotation, 2.0, 0.0, 0.0);
-            mat.gobo = gobo_handle.clone();
+            if needs_full_update {
+                mat.color         = color;
+                mat.gobo_params   = gobo_params;
+                mat.gobo          = gobo_handle.clone();
+                mat.beam_params   = Vec4::new(
+                    target_half_deg.to_radians(),
+                    BEAM_HEIGHT,
+                    2.0,
+                    0.8,
+                );
+                transform.scale = Vec3::new(scale_xz, 1.0, scale_xz);
+            }
+            if transform_changed {
+                mat.world_to_cone = global_tf.to_matrix().inverse();
+            }
         }
     }
 
-    let light_intensity = programmer.dimmer * 500_000.0 * if shutter_open { 1.0 } else { 0.0 };
-    let light_color = Color::srgb(programmer.color[0], programmer.color[1], programmer.color[2]);
-    for mut light in &mut light_q {
-        light.intensity = light_intensity;
-        light.color     = light_color;
+    // Sprite materials and point lights only need updating when programmer changes.
+    if needs_full_update {
+        for (sprite_handle, _global_tf) in &mut sprite_q {
+            if let Some(mat) = sprite_materials.get_mut(sprite_handle.id()) {
+                mat.color = color;
+                mat.sprite_params = Vec4::new(gobo_rotation, 2.0, 0.0, 0.0);
+                mat.gobo = gobo_handle.clone();
+            }
+        }
+
+        let light_intensity = programmer.dimmer * 500_000.0 * if shutter_open { 1.0 } else { 0.0 };
+        let light_color = Color::srgb(programmer.color[0], programmer.color[1], programmer.color[2]);
+        for mut light in &mut light_q {
+            light.intensity = light_intensity;
+            light.color     = light_color;
+        }
+    }
+
+    if programmer_changed {
+        *last_programmer = programmer.clone();
     }
 }
 

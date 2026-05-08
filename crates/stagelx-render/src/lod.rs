@@ -3,7 +3,10 @@ use bevy::{
     prelude::*,
     render::render_resource::{AsBindGroup, TextureFormat},
     shader::ShaderRef,
+    window::WindowResized,
 };
+
+use std::collections::HashMap;
 
 use stagelx_core::types::FixtureId;
 
@@ -20,6 +23,8 @@ use crate::{
 const TIER_1_THRESHOLD_PX: f32 = 50.0;
 /// Screen-space radius threshold (px) between Tier 1 and Tier 2.
 const TIER_2_THRESHOLD_PX: f32 = 200.0;
+/// Hysteresis band (px) to prevent per-frame tier flicker.
+const HYSTERESIS_PX: f32 = 10.0;
 /// Maximum number of beams that may ray-march (Tier 1 + Tier 2).
 const RAY_MARCH_HARD_CAP: usize = 64;
 
@@ -193,8 +198,9 @@ pub fn sync_beam_camera_to_foh(
 pub fn evaluate_beam_lod(
     windows: Query<&Window>,
     foh_q: Query<(&Transform, &Projection), With<FohCamera>>,
-    beam_q: Query<(Entity, &GlobalTransform, &BeamCone)>,
+    beam_q: Query<(Entity, &GlobalTransform, &BeamCone, Option<&BeamLodTier>)>,
     mut commands: Commands,
+    mut scored: Local<Vec<(Entity, f32, BeamLodTier)>>,
 ) {
     let Ok(window) = windows.single() else { return };
     let Ok((foh_tf, foh_proj)) = foh_q.single() else { return };
@@ -206,8 +212,9 @@ pub fn evaluate_beam_lod(
     let vp_h = window.physical_height() as f32;
 
     // 1. Compute screen-space radius for every beam.
-    let mut scored: Vec<(Entity, f32, BeamLodTier)> = Vec::with_capacity(beam_q.iter().len());
-    for (entity, global_tf, _beam) in &beam_q {
+    scored.clear();
+    scored.reserve(beam_q.iter().len());
+    for (entity, global_tf, _beam, current_tier) in &beam_q {
         let pos = global_tf.translation();
         let dist = pos.distance(foh_tf.translation);
         if dist < 1e-3 {
@@ -222,12 +229,48 @@ pub fn evaluate_beam_lod(
         let angular_radius = (approx_base_radius / dist).atan();
         let pixel_radius = angular_radius / (fov_y * 0.5).tan() * (vp_h * 0.5);
 
-        let tier = if pixel_radius < TIER_1_THRESHOLD_PX {
-            BeamLodTier::Tier0
-        } else if pixel_radius < TIER_2_THRESHOLD_PX {
-            BeamLodTier::Tier1
-        } else {
-            BeamLodTier::Tier2
+        // Apply hysteresis to avoid per-frame tier churn.
+        let tier = match current_tier {
+            Some(BeamLodTier::Tier0) => {
+                if pixel_radius > TIER_1_THRESHOLD_PX + HYSTERESIS_PX {
+                    if pixel_radius > TIER_2_THRESHOLD_PX + HYSTERESIS_PX {
+                        BeamLodTier::Tier2
+                    } else {
+                        BeamLodTier::Tier1
+                    }
+                } else {
+                    BeamLodTier::Tier0
+                }
+            }
+            Some(BeamLodTier::Tier1) => {
+                if pixel_radius < TIER_1_THRESHOLD_PX - HYSTERESIS_PX {
+                    BeamLodTier::Tier0
+                } else if pixel_radius > TIER_2_THRESHOLD_PX + HYSTERESIS_PX {
+                    BeamLodTier::Tier2
+                } else {
+                    BeamLodTier::Tier1
+                }
+            }
+            Some(BeamLodTier::Tier2) => {
+                if pixel_radius < TIER_2_THRESHOLD_PX - HYSTERESIS_PX {
+                    if pixel_radius < TIER_1_THRESHOLD_PX - HYSTERESIS_PX {
+                        BeamLodTier::Tier0
+                    } else {
+                        BeamLodTier::Tier1
+                    }
+                } else {
+                    BeamLodTier::Tier2
+                }
+            }
+            None => {
+                if pixel_radius < TIER_1_THRESHOLD_PX {
+                    BeamLodTier::Tier0
+                } else if pixel_radius < TIER_2_THRESHOLD_PX {
+                    BeamLodTier::Tier1
+                } else {
+                    BeamLodTier::Tier2
+                }
+            }
         };
 
         scored.push((entity, pixel_radius, tier));
@@ -247,7 +290,7 @@ pub fn evaluate_beam_lod(
     }
 
     // 3. Write tier components.
-    for (entity, _radius, tier) in scored {
+    for (entity, _radius, tier) in scored.drain(..) {
         commands.entity(entity).insert(tier);
     }
 }
@@ -262,11 +305,22 @@ pub fn apply_beam_lod(
     beam_sprites: Query<(Entity, &BeamSprite, &mut Visibility), Without<BeamCone>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
     mut commands: Commands,
+    mut sprite_by_id: Local<HashMap<FixtureId, Entity>>,
+    mut rebuild_lookup: Local<bool>,
+    added_sprites: Query<Entity, Added<BeamSprite>>,
+    mut removed_sprites: RemovedComponents<BeamSprite>,
 ) {
-    // Build lookup: FixtureId → sprite entity + visibility.
-    let mut sprite_by_id = std::collections::HashMap::<FixtureId, Entity>::default();
-    for (entity, sprite, _vis) in &beam_sprites {
-        sprite_by_id.insert(sprite.id, entity);
+    // Rebuild sprite lookup only when sprites are added or removed.
+    let has_removed = removed_sprites.read().next().is_some();
+    if !added_sprites.is_empty() || has_removed {
+        *rebuild_lookup = true;
+    }
+    if *rebuild_lookup {
+        sprite_by_id.clear();
+        for (entity, sprite, _vis) in &beam_sprites {
+            sprite_by_id.insert(sprite.id, entity);
+        }
+        *rebuild_lookup = false;
     }
 
     for (entity, cone, tier, mut vis, mat_handle) in &mut beam_cones {
@@ -303,5 +357,49 @@ pub fn apply_beam_lod(
             };
             commands.entity(sprite_entity).insert(sprite_vis);
         }
+    }
+}
+
+// ─── System: resize beam render target on window resize ───────────────────────
+
+pub fn resize_beam_render_target(
+    mut events: MessageReader<WindowResized>,
+    mut images: ResMut<Assets<Image>>,
+    mut beam_render_target: ResMut<BeamRenderTarget>,
+    mut beam_cam_q: Query<(&mut Camera, &mut RenderTarget), With<BeamHalfResCamera>>,
+    mut composite_q: Query<&mut MeshMaterial3d<BeamCompositeMaterial>, With<BeamCompositeQuad>>,
+    mut materials: ResMut<Assets<BeamCompositeMaterial>>,
+) {
+    for event in events.read() {
+        let (w, h) = (event.width as u32, event.height as u32);
+        let (half_w, half_h) = ((w / 2).max(1), (h / 2).max(1));
+
+        let new_image = Image::new_target_texture(
+            half_w,
+            half_h,
+            TextureFormat::Rgba16Float,
+            None,
+        );
+        let new_handle = images.add(new_image);
+
+        // Update beam camera render target and viewport.
+        for (mut cam, mut render_target) in &mut beam_cam_q {
+            *render_target = RenderTarget::Image(new_handle.clone().into());
+            cam.viewport = Some(Viewport {
+                physical_position: UVec2::ZERO,
+                physical_size: UVec2::new(half_w, half_h),
+                depth: 0.0..1.0,
+            });
+        }
+
+        // Update composite quad material.
+        for mat_handle in &mut composite_q {
+            if let Some(mat) = materials.get_mut(&*mat_handle) {
+                mat.beam_texture = new_handle.clone();
+            }
+        }
+
+        // Replace the old handle in the resource (old image will be GC'd by Bevy).
+        beam_render_target.half_res = new_handle;
     }
 }
