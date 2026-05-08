@@ -37,6 +37,9 @@ pub struct BeamMaterial {
     /// Written by articulate_beams every frame from GlobalTransform.
     #[uniform(5)]
     pub world_to_cone: Mat4,
+    /// Ray-march step count. 16 = Tier 1, 32 = Tier 2.
+    #[uniform(6)]
+    pub step_count: i32,
 }
 
 impl Material for BeamMaterial {

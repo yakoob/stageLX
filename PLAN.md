@@ -395,7 +395,11 @@ Output of a structured Performance vs Architect role-debate. These are binding d
 - [ ] Package GDTFs + XML into ZIP → save `.mvr` file
 
 **Rendering upgrades**
-- [ ] Ray-marched volumetric fog cone in `BeamMaterial` WGSL shader (march view ray through cone volume, accumulate density)
+- [x] Ray-marched volumetric fog cone in `BeamMaterial` WGSL shader (march view ray through cone volume, accumulate density)
+- [x] Three-tier LOD: Tier 0 billboard sprite, Tier 1 half-res offscreen (16 steps), Tier 2 full-res (32 steps)
+- [x] Hard cap 64 simultaneous ray-marched beams
+- [x] Dynamic step count uniform in beam shader
+- [ ] Front-to-back beam sorting (deferred to profiling phase)
 - [ ] Split-screen viewports: primary FOH perspective (3/4 width) + top ortho + side ortho
 - [x] Camera orbit/pan for FOH view; fixed orthographic cameras for top/side
 
@@ -446,4 +450,4 @@ Suggested `.gitignore`: standard Rust gitignore + `*.gdtf` test files (large bin
 
 ---
 
-*Last updated: 2026-05-08 — Camera orbit/pan done; Phase 5 in progress*
+*Last updated: 2026-05-08 — Volumetric beam LOD system done; Phase 5 in progress*

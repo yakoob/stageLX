@@ -9,8 +9,8 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(4) var<uniform> beam_params: vec4<f32>;
 /// world→cone-local inverse transform, written each frame by articulate_beams
 @group(#{MATERIAL_BIND_GROUP}) @binding(5) var<uniform> world_to_cone: mat4x4<f32>;
-
-const STEPS: i32 = 16;
+/// Ray-march step count. 16 = Tier 1, 32 = Tier 2.
+@group(#{MATERIAL_BIND_GROUP}) @binding(6) var<uniform> step_count: i32;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -65,11 +65,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if t1 <= t0 + 1e-6 { return vec4<f32>(0.0); }
 
-    // 16-step ray march accumulating volumetric density.
+    // Dynamic-step ray march accumulating volumetric density.
     var acc   = 0.0;
-    let inv_n = 1.0 / f32(STEPS);
+    let n     = step_count;
+    let inv_n = 1.0 / f32(n);
     let chord = t1 - t0;
-    for (var i = 0; i < STEPS; i++) {
+    for (var i = 0; i < n; i = i + 1) {
         let t   = t0 + (f32(i) + 0.5) * chord * inv_n;
         let p   = o + t * d;
         let r_c = max((H*0.5 - p.y) * ta, 1e-6);

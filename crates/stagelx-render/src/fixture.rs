@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use stagelx_core::types::FixtureId;
 use stagelx_state::{FixtureLibraryRes, PatchRes, Programmer, SpawnFixtureEvent, DespawnFixtureEvent};
 use crate::beam::{BeamMaterial, GoboLibrary, build_beam_cone};
+use crate::beam_sprite::{BeamSprite, BeamSpriteMaterial, build_beam_sprite_quad};
 
 const BEAM_HEIGHT: f32 = 18.0;
 const LENS_OFFSET: f32 = 0.14;
@@ -78,6 +79,7 @@ pub fn on_fixture_spawned(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
+    mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
 ) {
     let id = trigger.event().0;
     let Some(inst) = patch.0.get(id) else { return };
@@ -110,6 +112,7 @@ pub fn on_fixture_spawned(
         &mut meshes,
         &mut materials,
         &mut beam_materials,
+        &mut sprite_materials,
         FixtureSpawnConfig { id, position, suspended: true, pan_range, tilt_range, beam_angle_deg, body_mesh },
         open_gobo,
     );
@@ -136,6 +139,7 @@ pub fn spawn_fixture(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     beam_materials: &mut Assets<BeamMaterial>,
+    sprite_materials: &mut Assets<BeamSpriteMaterial>,
     cfg: FixtureSpawnConfig,
     open_gobo: Handle<Image>,
 ) {
@@ -172,10 +176,17 @@ pub fn spawn_fixture(
     let beam_mat  = beam_materials.add(BeamMaterial {
         color: LinearRgba::WHITE,
         gobo_params: Vec4::ZERO,
-        gobo: open_gobo,
-        // x=half_angle_rad  y=cone_length_m  z=scatter_k  w=extinction_k
+        gobo: open_gobo.clone(),
         beam_params: Vec4::new(half_angle, BEAM_HEIGHT, 2.0, 0.8),
         world_to_cone: Mat4::IDENTITY,
+        step_count: 16,
+    });
+
+    let sprite_mesh = meshes.add(build_beam_sprite_quad(beam_radius * 2.0));
+    let sprite_mat = sprite_materials.add(BeamSpriteMaterial {
+        color: LinearRgba::WHITE,
+        sprite_params: Vec4::new(0.0, 2.0, 0.0, 0.0),
+        gobo: open_gobo,
     });
 
     commands
@@ -217,6 +228,13 @@ pub fn spawn_fixture(
                         Transform::from_xyz(0.0, cone_y, 0.0).with_rotation(cone_rot),
                         BeamCone { id: cfg.id },
                     ));
+                    head.spawn((
+                        Mesh3d(sprite_mesh),
+                        MeshMaterial3d(sprite_mat),
+                        Transform::from_xyz(0.0, cone_y, 0.0).with_rotation(cone_rot),
+                        BeamSprite { id: cfg.id },
+                        Visibility::Hidden,
+                    ));
                 });
             });
         });
@@ -247,8 +265,10 @@ pub fn articulate_beams(
         (&MeshMaterial3d<BeamMaterial>, &mut Transform, &GlobalTransform),
         (With<BeamCone>, Without<YokeJoint>, Without<HeadJoint>),
     >,
+    mut sprite_q: Query<(&MeshMaterial3d<BeamSpriteMaterial>, &GlobalTransform), With<BeamSprite>>,
     mut light_q: Query<&mut PointLight, With<BeamSource>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
+    mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
     gobo_library: Res<GoboLibrary>,
 ) {
     let shutter_open = if programmer.strobe < 0.01 {
@@ -294,6 +314,15 @@ pub fn articulate_beams(
             );
         }
         transform.scale = Vec3::new(scale_xz, 1.0, scale_xz);
+    }
+
+    // Update sprite materials with same color/gobo.
+    for (sprite_handle, _global_tf) in &mut sprite_q {
+        if let Some(mat) = sprite_materials.get_mut(sprite_handle.id()) {
+            mat.color = color;
+            mat.sprite_params = Vec4::new(gobo_rotation, 2.0, 0.0, 0.0);
+            mat.gobo = gobo_handle.clone();
+        }
     }
 
     let light_intensity = programmer.dimmer * 500_000.0 * if shutter_open { 1.0 } else { 0.0 };

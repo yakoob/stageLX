@@ -1,8 +1,10 @@
 pub mod adapters;
 pub mod beam;
+pub mod beam_sprite;
 pub mod camera;
 pub mod fixture;
 pub mod gobo;
+pub mod lod;
 pub mod scene;
 pub mod venue;
 
@@ -13,8 +15,13 @@ use stagelx_core::{
 };
 use stagelx_state::{FixtureLibraryRes, PatchRes};
 use beam::{BeamMaterial, GoboLibrary, setup_gobos};
+use beam_sprite::BeamSpriteMaterial;
 use camera::{foh_camera_input, foh_camera_update};
 use fixture::{FixtureSpawnConfig, spawn_fixture};
+use lod::{
+    BeamCompositeMaterial, setup_beam_lod,
+    sync_beam_camera_to_foh, evaluate_beam_lod, apply_beam_lod,
+};
 pub use venue::{VenueRoot, VenueLoadState, load_venue};
 
 pub struct StageLxRenderPlugin;
@@ -23,11 +30,13 @@ impl Plugin for StageLxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<VenueLoadState>()
             .add_plugins(MaterialPlugin::<BeamMaterial>::default())
+            .add_plugins(MaterialPlugin::<BeamSpriteMaterial>::default())
+            .add_plugins(MaterialPlugin::<BeamCompositeMaterial>::default())
             .add_observer(fixture::on_fixture_spawned)
             .add_observer(fixture::on_fixture_despawned)
             .add_systems(
                 Startup,
-                (scene::setup_scene, setup_gobos, spawn_demo_fixtures).chain(),
+                (scene::setup_scene, setup_gobos, setup_beam_lod, spawn_demo_fixtures).chain(),
             )
             .add_systems(
                 Update,
@@ -35,9 +44,12 @@ impl Plugin for StageLxRenderPlugin {
                     scene::update_viewports_on_resize,
                     foh_camera_input,
                     foh_camera_update,
+                    sync_beam_camera_to_foh,
                     fixture::keyboard_programmer,
                     fixture::articulate_fixtures,
                     fixture::articulate_beams,
+                    evaluate_beam_lod,
+                    apply_beam_lod,
                 )
                     .chain(),
             );
@@ -51,6 +63,7 @@ fn spawn_demo_fixtures(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
+    mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
     mut patch: ResMut<PatchRes>,
     _library: Res<FixtureLibraryRes>,
     gobo_library: Res<GoboLibrary>,
@@ -79,6 +92,7 @@ fn spawn_demo_fixtures(
             &mut meshes,
             &mut materials,
             &mut beam_materials,
+            &mut sprite_materials,
             FixtureSpawnConfig {
                 id,
                 position: Vec3::new(x, 6.0, 0.0),
