@@ -19,15 +19,6 @@ use bevy::{
 #[derive(Component)]
 pub struct VenueRoot;
 
-// ─── Resource ─────────────────────────────────────────────────────────────────
-
-/// UI state for the venue loader.
-#[derive(Resource, Default)]
-pub struct VenueLoadState {
-    pub import_path: String,
-    pub import_error: Option<String>,
-}
-
 // ─── Public load function ─────────────────────────────────────────────────────
 
 /// Read a venue file from `path` and spawn it.

@@ -13,7 +13,7 @@ use stagelx_core::{
     fixture::FixtureInstance,
     types::{DmxAddress, FixtureId},
 };
-use stagelx_state::{FixtureLibraryRes, PatchRes};
+use stagelx_state::{FixtureLibraryRes, PatchRes, VenueLoadState};
 use beam::{BeamMaterial, GoboLibrary, setup_gobos};
 use beam_sprite::BeamSpriteMaterial;
 use camera::{foh_camera_input, foh_camera_update};
@@ -21,8 +21,9 @@ use fixture::{FixtureSpawnConfig, spawn_fixture};
 use lod::{
     BeamCompositeMaterial, setup_beam_lod,
     sync_beam_camera_to_foh, evaluate_beam_lod, apply_beam_lod,
+    resize_beam_render_target,
 };
-pub use venue::{VenueRoot, VenueLoadState, load_venue};
+pub use venue::{VenueRoot, load_venue};
 
 pub struct StageLxRenderPlugin;
 
@@ -42,6 +43,7 @@ impl Plugin for StageLxRenderPlugin {
                 Update,
                 (
                     scene::update_viewports_on_resize,
+                    resize_beam_render_target,
                     foh_camera_input,
                     foh_camera_update,
                     sync_beam_camera_to_foh,
@@ -76,6 +78,12 @@ fn spawn_demo_fixtures(
     for i in 0..COUNT {
         let x = -total_width / 2.0 + i as f32 * SPACING;
 
+        let channel_map = _library
+            .library
+            .get("generic-moving-head")
+            .map(|ft| ft.channel_map("Standard"))
+            .unwrap_or_default();
+
         let id = patch.0.add(FixtureInstance {
             id: FixtureId(0),
             name: format!("MH {}", i + 1),
@@ -84,6 +92,7 @@ fn spawn_demo_fixtures(
             address: DmxAddress::new(1, (i as u16 * 8 + 1).min(512)),
             position: [x, 6.0, 0.0],
             rotation: [0.0, 0.0, 0.0],
+            channel_map,
         });
 
         // Demo fixtures spawn directly to avoid the 1-frame event delay.

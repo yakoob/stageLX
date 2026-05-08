@@ -33,7 +33,7 @@ pub struct DespawnFixtureEvent(pub FixtureId);
 
 /// Normalised programmer state — all channel values 0.0–1.0.
 /// Written by the UI and keyboard handler; read by render and DMX output.
-#[derive(Resource)]
+#[derive(Resource, Clone, PartialEq)]
 pub struct Programmer {
     pub pan: f32,
     pub tilt: f32,
@@ -99,6 +99,15 @@ pub struct FixtureLibraryRes {
     /// MVR import state.
     pub mvr_import_path: String,
     pub mvr_import_error: Option<String>,
+}
+
+// ─── VenueLoadState ───────────────────────────────────────────────────────────
+
+/// UI state for the venue loader (moved from stagelx-render per Rule 21).
+#[derive(Resource, Default)]
+pub struct VenueLoadState {
+    pub import_path: String,
+    pub import_error: Option<String>,
 }
 
 // ─── IoConfig ─────────────────────────────────────────────────────────────────
