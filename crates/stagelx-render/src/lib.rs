@@ -29,6 +29,7 @@ impl Plugin for StageLxRenderPlugin {
             .add_systems(
                 Update,
                 (
+                    scene::update_viewports_on_resize,
                     fixture::keyboard_programmer,
                     fixture::articulate_fixtures,
                     fixture::articulate_beams,
