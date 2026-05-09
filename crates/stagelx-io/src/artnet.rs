@@ -1,7 +1,8 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     sync::Arc,
+    time::Duration,
 };
 
 use bevy::prelude::*;
@@ -85,6 +86,8 @@ pub struct ArtNetState {
     cached_allowlist_src: String,
     /// Shared drop counter incremented by the RX thread when the channel is full.
     pub rx_drops: Arc<AtomicU64>,
+    /// Signal for the RX background thread to exit.
+    shutdown: Arc<AtomicBool>,
     /// Throttle bind retries to avoid log-spam when the port is busy.
     last_bind_attempt: Option<std::time::Instant>,
 }
@@ -98,6 +101,7 @@ impl Default for ArtNetState {
             cached_allowlist: Vec::new(),
             cached_allowlist_src: String::new(),
             rx_drops: Arc::new(AtomicU64::new(0)),
+            shutdown: Arc::new(AtomicBool::new(false)),
             last_bind_attempt: None,
         }
     }
@@ -147,11 +151,13 @@ pub fn artnet_manage_socket(
                     // blocks in the kernel until a packet arrives instead of
                     // busy-polling with sleep(1ms).
                     rx_sock.set_nonblocking(false).ok();
+                    rx_sock.set_read_timeout(Some(Duration::from_millis(100))).ok();
 
                     let (tx, rx) = bounded::<ReceivedPacket>(8);
                     state.rx_chan = Some(rx);
                     state.rx_thread_tx = Some(tx.clone());
                     let drops = state.rx_drops.clone();
+                    let shutdown = Arc::clone(&state.shutdown);
 
                     std::thread::spawn(move || {
                         let mut buf = [0u8; 600];
@@ -172,9 +178,14 @@ pub fn artnet_manage_socket(
                                         }
                                     }
                                 }
+                                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                                    if shutdown.load(Ordering::Relaxed) {
+                                        break;
+                                    }
+                                }
                                 Err(e) => {
                                     warn!("Art-Net RX error: {e}");
-                                    std::thread::sleep(std::time::Duration::from_millis(10));
+                                    std::thread::sleep(Duration::from_millis(10));
                                 }
                             }
                         }
@@ -186,8 +197,10 @@ pub fn artnet_manage_socket(
     }
 
     if !cfg.rx_enabled {
+        state.shutdown.store(true, Ordering::Relaxed);
         state.rx_chan = None;
         state.rx_thread_tx = None;
+        state.shutdown = Arc::new(AtomicBool::new(false));
     }
 
     // Rebuild the allowlist cache only when the config string actually changed.

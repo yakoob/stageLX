@@ -14,7 +14,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use stagelx_state::{Programmer, ProtocolStatus};
+use stagelx_state::{PatchRes, ProtocolStatus};
+use stagelx_core::types::FixtureId;
+use stagelx_dmx::engine::DmxEngineRes;
+use stagelx_dmx::merge::MergeStrategy;
 use crate::config::OscConfig;
 use crate::stats::OscStats;
 
@@ -113,48 +116,79 @@ fn forward_packet(pkt: OscPacket, tx: &Sender<OscMsg>) {
     }
 }
 
-/// Drain received OSC messages and apply them to the Programmer.
+/// Drain received OSC messages and route per-fixture through the DMX engine.
+///
+/// Address schema: `/fixture/{id}/{attr}` with a single f32 arg (0.0–1.0).
+/// Special `color` attr accepts three f32 args for RGB.
 pub fn osc_receive(
     state: Res<OscState>,
-    mut programmer: ResMut<Programmer>,
+    patch: Res<PatchRes>,
+    mut engine: ResMut<DmxEngineRes>,
     mut stats: ResMut<OscStats>,
 ) {
+    let source = engine
+        .0
+        .get_or_add_source("osc_in", 150, MergeStrategy::Ltp);
+
     let mut count = 0u64;
     while let Ok(msg) = state.rx.try_recv() {
         // Parse /fixture/{id}/{attr}
         let parts: Vec<&str> = msg.addr.trim_start_matches('/').split('/').collect();
-        if parts.len() >= 3 && parts[0] == "fixture" {
-            let attr = parts[2];
-            match attr {
-                "color" => {
-                    // Expects three float args
-                    let floats: Vec<f32> = msg.args.iter().filter_map(osc_float).collect();
-                    if floats.len() >= 3 {
-                        programmer.color = [
-                            floats[0].clamp(0.0, 1.0),
-                            floats[1].clamp(0.0, 1.0),
-                            floats[2].clamp(0.0, 1.0),
-                        ];
-                    }
-                }
-                _ => {
-                    if let Some(val) = msg.args.first().and_then(osc_float) {
-                        let val = val.clamp(0.0, 1.0);
-                        match attr {
-                            "dimmer" => programmer.dimmer      = val,
-                            "pan"    => programmer.pan         = val,
-                            "tilt"   => programmer.tilt        = val,
-                            "zoom"   => programmer.zoom        = val,
-                            "strobe" => programmer.strobe      = val,
-                            "red"    => programmer.color[0]    = val,
-                            "green"  => programmer.color[1]    = val,
-                            "blue"   => programmer.color[2]    = val,
-                            _        => {}
-                        }
-                    }
+        if parts.len() < 3 || parts[0] != "fixture" {
+            continue;
+        }
+        let Ok(fixture_id) = parts[1].parse::<u32>() else { continue };
+        let fixture_id = FixtureId(fixture_id);
+        let attr = parts[2];
+
+        let Some(inst) = patch.0.get(fixture_id) else { continue };
+        let base = inst.address.channel;
+        let universe = inst.address.universe;
+        let buf = source.universes.get_or_insert(universe);
+
+        match attr {
+            "color" => {
+                let floats: Vec<f32> = msg.args.iter().filter_map(osc_float).collect();
+                if floats.len() >= 3 {
+                    let r = (floats[0].clamp(0.0, 1.0) * 255.0) as u8;
+                    let g = (floats[1].clamp(0.0, 1.0) * 255.0) as u8;
+                    let b = (floats[2].clamp(0.0, 1.0) * 255.0) as u8;
+                    if let Some(off) = inst.channel_map.red   { buf.set(base + off, r); }
+                    if let Some(off) = inst.channel_map.green { buf.set(base + off, g); }
+                    if let Some(off) = inst.channel_map.blue  { buf.set(base + off, b); }
+                    count += 1;
                 }
             }
-            count += 1;
+            _ => {
+                let Some(val) = msg.args.first().and_then(osc_float) else { continue };
+                let val = val.clamp(0.0, 1.0);
+                let byte = (val * 255.0) as u8;
+                let u16_raw = (val * 65535.0) as u16;
+                match attr {
+                    "dimmer" => {
+                        if let Some(off) = inst.channel_map.dimmer { buf.set(base + off, byte); }
+                    }
+                    "pan" => {
+                        if let Some(off) = inst.channel_map.pan { buf.set(base + off, (u16_raw >> 8) as u8); }
+                        if let Some(off) = inst.channel_map.pan_fine { buf.set(base + off, (u16_raw & 0xFF) as u8); }
+                    }
+                    "tilt" => {
+                        if let Some(off) = inst.channel_map.tilt { buf.set(base + off, (u16_raw >> 8) as u8); }
+                        if let Some(off) = inst.channel_map.tilt_fine { buf.set(base + off, (u16_raw & 0xFF) as u8); }
+                    }
+                    "red" => {
+                        if let Some(off) = inst.channel_map.red { buf.set(base + off, byte); }
+                    }
+                    "green" => {
+                        if let Some(off) = inst.channel_map.green { buf.set(base + off, byte); }
+                    }
+                    "blue" => {
+                        if let Some(off) = inst.channel_map.blue { buf.set(base + off, byte); }
+                    }
+                    _ => { continue; }
+                }
+                count += 1;
+            }
         }
     }
     stats.rx_count = stats.rx_count.saturating_add(count);
