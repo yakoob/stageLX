@@ -91,6 +91,9 @@ pub struct MidiConfig {
     pub enabled: bool,
     /// MIDI port name (exact string from midir port listing).
     pub port: String,
+    /// When true, MIDI CCs control the fixtures currently selected in the patch
+    /// panel instead of the global Programmer.
+    pub target_selected_fixtures: bool,
     /// MIDI CC numbers mapped to programmer attributes.
     pub cc_dimmer: u8,
     pub cc_pan: u8,
@@ -107,6 +110,7 @@ impl Default for MidiConfig {
         Self {
             enabled: false,
             port: String::new(),
+            target_selected_fixtures: false,
             cc_dimmer: 7,
             cc_pan: 10,
             cc_tilt: 11,

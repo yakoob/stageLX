@@ -5,6 +5,7 @@ use crate::theme::*;
 use crate::widgets;
 use crate::{ActiveProtocol, IoPanelState};
 use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
+use stagelx_io::midi::MidiTarget;
 use stagelx_io::stats::{ArtNetStats, MidiStats, OscStats, SacnStats, UsbStats};
 use stagelx_state::ProtocolStatus;
 
@@ -22,6 +23,7 @@ pub fn io_panel_docked(
     usb_stats: &UsbStats,
     midi_cfg: &mut MidiConfig,
     midi_stats: &MidiStats,
+    midi_target: &MidiTarget,
     osc_cfg: &mut OscConfig,
     osc_stats: &OscStats,
     state: &mut IoPanelState,
@@ -82,7 +84,7 @@ pub fn io_panel_docked(
         ActiveProtocol::ArtNet => artnet_config(ui, artnet_cfg),
         ActiveProtocol::Sacn => sacn_config(ui, sacn_cfg),
         ActiveProtocol::Usb => usb_config(ui, usb_cfg, usb_stats),
-        ActiveProtocol::Midi => midi_config(ui, midi_cfg),
+        ActiveProtocol::Midi => midi_config(ui, midi_cfg, midi_target),
         ActiveProtocol::Osc => osc_config(ui, osc_cfg),
     }
 
@@ -215,7 +217,7 @@ fn usb_config(ui: &mut Ui, cfg: &mut UsbConfig, stats: &UsbStats) {
     }
 }
 
-fn midi_config(ui: &mut Ui, cfg: &mut MidiConfig) {
+fn midi_config(ui: &mut Ui, cfg: &mut MidiConfig, target: &MidiTarget) {
     config_row(ui, "State", |ui| {
         let mut en = cfg.enabled;
         widgets::toggle(ui, &mut en, "ENABLE");
@@ -223,6 +225,16 @@ fn midi_config(ui: &mut Ui, cfg: &mut MidiConfig) {
     });
     config_row(ui, "Port", |ui| {
         ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.port).hint_text("select MIDI input…").text_color(FG));
+    });
+
+    config_row(ui, "Target", |ui| {
+        let mut selected = cfg.target_selected_fixtures;
+        let label = if selected { "SELECTED FIXTURES" } else { "GLOBAL" };
+        widgets::toggle(ui, &mut selected, label);
+        cfg.target_selected_fixtures = selected;
+        if selected {
+            ui.label(RichText::new(format!("{} fixtures", target.fixture_ids.len())).size(10.0).monospace().color(FG_FAINT));
+        }
     });
 
     ui.horizontal(|ui| {

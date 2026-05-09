@@ -7,9 +7,13 @@
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use midir::MidiInput;
-use stagelx_state::{Programmer, ProtocolStatus};
+use stagelx_state::{PatchRes, Programmer, ProtocolStatus};
+use stagelx_core::types::FixtureId;
 use crate::config::MidiConfig;
 use crate::stats::MidiStats;
+use stagelx_dmx::engine::DmxEngineRes;
+use stagelx_dmx::merge::MergeStrategy;
+use std::collections::HashSet;
 
 // ─── State (NonSend — MidiInputConnection is !Sync) ───────────────────────────
 
@@ -77,29 +81,74 @@ pub fn midi_manage_connection(
     }
 }
 
-/// Drain received CC messages and apply them to the Programmer resource.
+/// When empty, MIDI CCs control the global Programmer.
+/// When non-empty, CCs are written directly to each listed fixture's DMX channels.
+#[derive(Resource, Default)]
+pub struct MidiTarget {
+    pub fixture_ids: HashSet<FixtureId>,
+}
+
+/// Drain received CC messages and route to Programmer or per-fixture DMX.
 pub fn midi_receive(
     state: NonSendMut<MidiState>,
+    target: Res<MidiTarget>,
     mut programmer: ResMut<Programmer>,
+    patch: Res<PatchRes>,
+    mut engine: ResMut<DmxEngineRes>,
     cfg: Res<MidiConfig>,
     mut stats: ResMut<MidiStats>,
 ) {
     let mut count = 0u64;
-    while let Ok(msg) = state.rx.try_recv() {
-        let status = msg[0] & 0xF0;
-        if status != 0xB0 { continue; } // CC only
-        let cc  = msg[1];
-        let val = msg[2] as f32 / 127.0;
 
-        if      cc == cfg.cc_dimmer { programmer.dimmer     = val; }
-        else if cc == cfg.cc_pan    { programmer.pan        = val; }
-        else if cc == cfg.cc_tilt   { programmer.tilt       = val; }
-        else if cc == cfg.cc_red    { programmer.color[0]   = val; }
-        else if cc == cfg.cc_green  { programmer.color[1]   = val; }
-        else if cc == cfg.cc_blue   { programmer.color[2]   = val; }
-        else if cc == cfg.cc_zoom   { programmer.zoom       = val; }
-        else if cc == cfg.cc_strobe { programmer.strobe     = val; }
-        count += 1;
+    if target.fixture_ids.is_empty() {
+        // ── Global mode: control Programmer ───────────────────────────────────
+        while let Ok(msg) = state.rx.try_recv() {
+            let status = msg[0] & 0xF0;
+            if status != 0xB0 { continue; }
+            let cc  = msg[1];
+            let val = msg[2] as f32 / 127.0;
+
+            if      cc == cfg.cc_dimmer { programmer.dimmer     = val; }
+            else if cc == cfg.cc_pan    { programmer.pan        = val; }
+            else if cc == cfg.cc_tilt   { programmer.tilt       = val; }
+            else if cc == cfg.cc_red    { programmer.color[0]   = val; }
+            else if cc == cfg.cc_green  { programmer.color[1]   = val; }
+            else if cc == cfg.cc_blue   { programmer.color[2]   = val; }
+            else if cc == cfg.cc_zoom   { programmer.zoom       = val; }
+            else if cc == cfg.cc_strobe { programmer.strobe     = val; }
+            count += 1;
+        }
+    } else {
+        // ── Per-fixture mode: write to DMX engine ─────────────────────────────
+        let source = engine
+            .0
+            .get_or_add_source("midi_in", 160, MergeStrategy::Ltp);
+
+        while let Ok(msg) = state.rx.try_recv() {
+            let status = msg[0] & 0xF0;
+            if status != 0xB0 { continue; }
+            let cc  = msg[1];
+            let val = msg[2] as f32 / 127.0;
+            let byte = (val * 255.0) as u8;
+            let u16_raw = (val * 65535.0) as u16;
+
+            for &id in &target.fixture_ids {
+                let Some(inst) = patch.0.get(id) else { continue };
+                let base = inst.address.channel;
+                let universe = inst.address.universe;
+                let buf = source.universes.get_or_insert(universe);
+
+                if      cc == cfg.cc_dimmer { if let Some(off) = inst.channel_map.dimmer  { buf.set(base + off, byte); } }
+                else if cc == cfg.cc_pan    { if let Some(off) = inst.channel_map.pan      { buf.set(base + off, (u16_raw >> 8) as u8); }
+                                               if let Some(off) = inst.channel_map.pan_fine { buf.set(base + off, (u16_raw & 0xFF) as u8); } }
+                else if cc == cfg.cc_tilt   { if let Some(off) = inst.channel_map.tilt     { buf.set(base + off, (u16_raw >> 8) as u8); }
+                                               if let Some(off) = inst.channel_map.tilt_fine{ buf.set(base + off, (u16_raw & 0xFF) as u8); } }
+                else if cc == cfg.cc_red    { if let Some(off) = inst.channel_map.red      { buf.set(base + off, byte); } }
+                else if cc == cfg.cc_green  { if let Some(off) = inst.channel_map.green    { buf.set(base + off, byte); } }
+                else if cc == cfg.cc_blue   { if let Some(off) = inst.channel_map.blue     { buf.set(base + off, byte); } }
+            }
+            count += 1;
+        }
     }
     stats.rx_count = stats.rx_count.saturating_add(count);
 }

@@ -22,7 +22,7 @@ use stats::{
     ArtNetStats, SacnStats, UsbStats, MidiStats, OscStats,
 };
 use usb::{UsbDmxState, usb_manage_device, usb_send};
-use midi::{MidiState, midi_manage_connection, midi_receive};
+use midi::{MidiState, MidiTarget, midi_manage_connection, midi_receive};
 use osc::{OscState, osc_manage_socket, osc_receive};
 use supervisor::IoSupervisor;
 use stagelx_dmx::engine::DmxEngineRes;
@@ -55,6 +55,7 @@ impl Plugin for IoPlugin {
             .init_resource::<IoSupervisor>()
             .insert_non_send_resource(UsbDmxState::default())
             .insert_non_send_resource(MidiState::default())
+            .init_resource::<MidiTarget>()
             .insert_resource(Time::<Fixed>::from_hz(DMX_OUTPUT_HZ))
             // Every render frame: manage sockets/devices, drain incoming packets.
             .add_systems(

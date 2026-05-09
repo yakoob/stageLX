@@ -15,6 +15,7 @@ pub use stagelx_state::{
     Programmer, SpawnFixtureEvent, VenueLoadState,
 };
 use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
+use stagelx_io::midi::MidiTarget;
 use stagelx_io::stats::{ArtNetStats, MidiStats, OscStats, SacnStats, UsbStats};
 use stagelx_core::types::FixtureId;
 
@@ -153,7 +154,8 @@ impl Plugin for StageLxUiPlugin {
             .add_systems(
                 EguiPrimaryContextPass,
                 (ui_root_system, io_panel_system).chain(),
-            );
+            )
+            .add_systems(Update, sync_midi_target);
     }
 }
 
@@ -169,6 +171,7 @@ fn io_panel_system(
     usb_stats: Res<UsbStats>,
     mut midi_cfg: ResMut<MidiConfig>,
     midi_stats: Res<MidiStats>,
+    midi_target: Res<MidiTarget>,
     mut osc_cfg: ResMut<OscConfig>,
     osc_stats: Res<OscStats>,
 ) {
@@ -221,6 +224,7 @@ fn io_panel_system(
                         &usb_stats,
                         &mut midi_cfg,
                         &midi_stats,
+                        &midi_target,
                         &mut osc_cfg,
                         &osc_stats,
                         &mut io_state,
@@ -247,6 +251,7 @@ fn io_panel_system(
                     &usb_stats,
                     &mut midi_cfg,
                     &midi_stats,
+                    &midi_target,
                     &mut osc_cfg,
                     &osc_stats,
                     &mut io_state,
@@ -255,6 +260,20 @@ fn io_panel_system(
                     layout.detached.remove(&PanelKind::Io);
                 }
             });
+    }
+}
+
+fn sync_midi_target(
+    cfg: Res<MidiConfig>,
+    patch_sel: Res<PatchSelection>,
+    mut midi_target: ResMut<MidiTarget>,
+) {
+    if cfg.target_selected_fixtures {
+        if midi_target.fixture_ids != patch_sel.selected_ids {
+            midi_target.fixture_ids.clone_from(&patch_sel.selected_ids);
+        }
+    } else if !midi_target.fixture_ids.is_empty() {
+        midi_target.fixture_ids.clear();
     }
 }
 
