@@ -1,4 +1,4 @@
-use bevy_egui::egui::{Color32, RichText};
+use bevy_egui::egui::{Color32, FontId, RichText};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Design Tokens — oklch values pre-converted to sRGB
@@ -6,9 +6,9 @@ use bevy_egui::egui::{Color32, RichText};
 
 // ── Surfaces ───────────────────────────────────────────────────────────────────
 pub const BG_APP: Color32 = Color32::from_rgb(11, 13, 17); // oklch(0.135 0.004 240)
-pub const BG_CHROME: Color32 = Color32::from_rgb(19, 22, 26); // oklch(0.165 0.004 240)
-pub const BG_PANEL: Color32 = Color32::from_rgb(18, 20, 22); // oklch(0.190 0.005 240)
-pub const BG_RAISED: Color32 = Color32::from_rgb(26, 28, 30); // oklch(0.225 0.005 240)
+pub const BG_CHROME: Color32 = Color32::from_rgb(22, 25, 28); // oklch(0.165 0.004 240)
+pub const BG_PANEL: Color32 = Color32::from_rgb(28, 31, 34); // oklch(0.190 0.005 240)
+pub const BG_RAISED: Color32 = Color32::from_rgb(36, 39, 42); // oklch(0.225 0.005 240)
 pub const BG_INPUT: Color32 = Color32::from_rgb(10, 11, 13); // oklch(0.150 0.004 240)
 pub const BG_HOVER: Color32 = Color32::from_rgb(30, 33, 35); // oklch(0.245 0.005 240)
 pub const BG_INPUT_FOCUS: Color32 = Color32::from_rgb(10, 13, 14); // oklch(0.155 0.005 240)
@@ -51,7 +51,24 @@ pub const GLOW_RX: Color32 = Color32::from_rgba_premultiplied(124, 213, 144, 153
 pub const GLOW_TX: Color32 = Color32::from_rgba_premultiplied(44, 204, 235, 128);
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Typography helpers
+// FontId helpers (explicit sizes for painter.text calls)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub fn font_eyebrow() -> FontId { FontId::monospace(9.0) }
+pub fn font_hint() -> FontId { FontId::monospace(9.0) }
+pub fn font_status() -> FontId { FontId::monospace(10.0) }
+pub fn font_field_label() -> FontId { FontId::proportional(10.0) }
+pub fn font_body() -> FontId { FontId::proportional(11.0) }
+pub fn font_address() -> FontId { FontId::monospace(11.0) }
+pub fn font_panel_title() -> FontId { FontId::proportional(11.0) }
+pub fn font_show_name() -> FontId { FontId::proportional(12.0) }
+pub fn font_fader_readout() -> FontId { FontId::monospace(14.0) }
+pub fn font_wordmark() -> FontId { FontId::proportional(14.0) }
+pub fn font_big_counter() -> FontId { FontId::monospace(16.0) }
+pub fn font_encoder_readout() -> FontId { FontId::monospace(18.0) }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Typography helpers (RichText for ui.label/add)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn wordmark(text: impl Into<String>) -> RichText {

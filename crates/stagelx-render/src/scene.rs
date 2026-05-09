@@ -10,28 +10,44 @@ pub struct TopCamera;
 #[derive(Component)]
 pub struct SideCamera;
 
-fn foh_viewport(w: u32, h: u32) -> Viewport {
-    Viewport {
-        physical_position: UVec2::ZERO,
-        physical_size: UVec2::new(w * 3 / 4, h),
-        depth: 0.0..1.0,
-    }
-}
+// Logical-pixel sizes of the egui panels surrounding the viewport area.
+const LEFT_PANEL: f32 = 300.0;
+const RIGHT_PANEL: f32 = 320.0;
+const TOP_BAR: f32 = 36.0;
+const STATUS_BAR: f32 = 22.0;
+const BOTTOM_STRIP: f32 = 248.0;
 
-fn top_viewport(w: u32, h: u32) -> Viewport {
-    Viewport {
-        physical_position: UVec2::new(w * 3 / 4, 0),
-        physical_size: UVec2::new(w / 4, h / 2),
-        depth: 0.0..1.0,
-    }
-}
+fn compute_viewports(pw: u32, ph: u32, sf: f32) -> (Viewport, Viewport, Viewport) {
+    let left  = (LEFT_PANEL   * sf).round() as u32;
+    let right = (RIGHT_PANEL  * sf).round() as u32;
+    let top   = (TOP_BAR      * sf).round() as u32;
+    let bot   = (STATUS_BAR   * sf).round() as u32;
+    let strip = (BOTTOM_STRIP * sf).round() as u32;
 
-fn side_viewport(w: u32, h: u32) -> Viewport {
-    Viewport {
-        physical_position: UVec2::new(w * 3 / 4, h / 2),
-        physical_size: UVec2::new(w / 4, h / 2),
-        depth: 0.0..1.0,
-    }
+    let vp_w = pw.saturating_sub(left + right);
+    let vp_h = ph.saturating_sub(top + bot + strip);
+
+    let foh_w  = (vp_w as f32 * 0.75) as u32;
+    let mini_w = vp_w.saturating_sub(foh_w);
+    let mini_h = vp_h / 2;
+
+    (
+        Viewport {
+            physical_position: UVec2::new(left, top),
+            physical_size: UVec2::new(foh_w, vp_h),
+            depth: 0.0..1.0,
+        },
+        Viewport {
+            physical_position: UVec2::new(left + foh_w, top),
+            physical_size: UVec2::new(mini_w, mini_h),
+            depth: 0.0..1.0,
+        },
+        Viewport {
+            physical_position: UVec2::new(left + foh_w, top + mini_h),
+            physical_size: UVec2::new(mini_w, vp_h.saturating_sub(mini_h)),
+            depth: 0.0..1.0,
+        },
+    )
 }
 
 pub fn setup_scene(
@@ -40,10 +56,12 @@ pub fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
     windows: Query<&Window>,
 ) {
-    let (w, h) = windows
+    let (w, h, sf) = windows
         .single()
-        .map(|win| (win.physical_width(), win.physical_height()))
-        .unwrap_or((1600, 900));
+        .map(|win| (win.physical_width(), win.physical_height(), win.scale_factor() as f32))
+        .unwrap_or((1440, 900, 2.0));
+
+    let (foh_vp, top_vp, side_vp) = compute_viewports(w, h, sf);
 
     // Stage floor
     commands.spawn((
@@ -74,7 +92,7 @@ pub fn setup_scene(
         FohCamera,
         Camera3d::default(),
         Camera {
-            viewport: Some(foh_viewport(w, h)),
+            viewport: Some(foh_vp),
             ..default()
         },
         FohCameraController::default(),
@@ -85,7 +103,7 @@ pub fn setup_scene(
         TopCamera,
         Camera3d::default(),
         Camera {
-            viewport: Some(top_viewport(w, h)),
+            viewport: Some(top_vp),
             order: 1,
             ..default()
         },
@@ -104,7 +122,7 @@ pub fn setup_scene(
         SideCamera,
         Camera3d::default(),
         Camera {
-            viewport: Some(side_viewport(w, h)),
+            viewport: Some(side_vp),
             order: 2,
             ..default()
         },
@@ -148,14 +166,16 @@ pub fn update_viewports_on_resize(
     if w == 0 || h == 0 {
         return;
     }
+    let sf = window.scale_factor() as f32;
+    let (foh_vp, top_vp, side_vp) = compute_viewports(w, h, sf);
 
     for (mut cam, foh, top, side) in &mut cameras {
         cam.viewport = Some(if foh.is_some() {
-            foh_viewport(w, h)
+            foh_vp.clone()
         } else if top.is_some() {
-            top_viewport(w, h)
+            top_vp.clone()
         } else if side.is_some() {
-            side_viewport(w, h)
+            side_vp.clone()
         } else {
             continue;
         });

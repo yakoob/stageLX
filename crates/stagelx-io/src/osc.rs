@@ -14,7 +14,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use stagelx_state::{IoConfig, Programmer};
+use stagelx_state::{IoConfig, Programmer, ProtocolStatus};
 
 // ─── Incoming message ──────────────────────────────────────────────────────────
 
@@ -78,12 +78,12 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
                     }
                 });
                 info!("OSC listening on {}", addr);
-                cfg.osc_status = format!("Listening :{}", cfg.osc_port);
+                cfg.osc_status = ProtocolStatus::Live;
                 state.bound_port = Some(cfg.osc_port);
                 state.socket = Some(sock);
             }
-            Err(e) => {
-                cfg.osc_status = format!("Bind failed: {e}");
+            Err(_e) => {
+                cfg.osc_status = ProtocolStatus::Error;
             }
         }
     }
@@ -94,7 +94,7 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
         state.socket = None;
         state.bound_port = None;
         state.shutdown = Arc::new(AtomicBool::new(false));
-        cfg.osc_status = "Closed".into();
+        cfg.osc_status = ProtocolStatus::Idle;
     }
 }
 

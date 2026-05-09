@@ -12,7 +12,7 @@ use std::io::Write;
 use bevy::prelude::*;
 use serialport::SerialPort;
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::IoConfig;
+use stagelx_state::{IoConfig, ProtocolStatus};
 
 pub const ENTTEC_BAUD: u32 = 250_000;
 const LABEL_OUTPUT_DMX: u8 = 6;
@@ -41,7 +41,7 @@ pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, mut cfg: ResMut<IoC
 
     if cfg.usb_tx_enabled && state.device.is_none() {
         if port.is_empty() {
-            cfg.usb_status = "No port configured".into();
+            cfg.usb_status = ProtocolStatus::Warn;
             return;
         }
         match serialport::new(port, ENTTEC_BAUD)
@@ -50,18 +50,18 @@ pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, mut cfg: ResMut<IoC
         {
             Ok(dev) => {
                 info!("USB DMX opened: {}", port);
-                cfg.usb_status = format!("Open: {port}");
+                cfg.usb_status = ProtocolStatus::Live;
                 state.device = Some(dev);
             }
-            Err(e) => {
-                cfg.usb_status = format!("Open failed: {e}");
+            Err(_e) => {
+                cfg.usb_status = ProtocolStatus::Error;
             }
         }
     }
 
     if !cfg.usb_tx_enabled && state.device.is_some() {
         state.device = None;
-        cfg.usb_status = "Closed".into();
+        cfg.usb_status = ProtocolStatus::Idle;
         info!("USB DMX closed");
     }
 }
@@ -84,10 +84,10 @@ pub fn usb_send(
         match dev.write_all(&frame) {
             Ok(()) => {
                 cfg.usb_tx_count = cfg.usb_tx_count.saturating_add(1);
-                cfg.usb_status = format!("TX u{universe}");
+                cfg.usb_status = ProtocolStatus::Live;
             }
-            Err(e) => {
-                cfg.usb_status = format!("TX error: {e}");
+            Err(_e) => {
+                cfg.usb_status = ProtocolStatus::Error;
                 // Drop the device; usb_manage_device will try to re-open it.
                 state.device = None;
             }

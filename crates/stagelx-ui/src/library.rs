@@ -1,18 +1,11 @@
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Color32, Pos2, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
+use bevy_egui::egui::{self, Color32, Pos2, RichText, Stroke, Ui, Vec2};
 use stagelx_gdtf::parse_mvr;
 use crate::VenueLoadState;
 
 use crate::theme::*;
 use crate::widgets;
 use crate::{FixtureLibraryRes, LoadVenueEvent, PatchRes, SpawnFixtureEvent};
-
-// Legacy entry point (kept for API compat — all UI now routes through ui_root_system)
-pub fn library_panel(
-    mut _ctx: bevy_egui::EguiContexts,
-    mut _res: ResMut<FixtureLibraryRes>,
-) {
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Library Panel (docked / inline)
@@ -33,9 +26,6 @@ pub fn library_panel_docked(
     venue_state: &mut VenueLoadState,
     commands: &mut Commands,
 ) {
-    let available_width = ui.available_width();
-    ui.set_min_width(available_width);
-
     let tab_id = ui.id().with("lib_tab");
     let mut tab: LibraryTab = ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_insert_with(tab_id, LibraryTab::default).clone()
@@ -50,40 +40,11 @@ pub fn library_panel_docked(
             ("Venue", LibraryTab::Venue, 0usize),
         ] {
             let active = tab == t;
-            let mut rich = RichText::new(label).size(11.0).color(if active { FG } else { FG_SECONDARY });
-            if active {
-                rich = rich.strong();
-            }
-            let galley = ui.painter().layout_no_wrap(label.to_string(), egui::TextStyle::Body.resolve(ui.style()), if active { FG } else { FG_SECONDARY });
-            let width = galley.size().x + 32.0;
-            let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
-            if response.clicked() {
+            if widgets::library_tab(ui, label, active, Some(badge)).clicked() {
                 tab = t;
-            }
-            if ui.is_rect_visible(rect) {
-                let painter = ui.painter();
-                if active {
-                    painter.line_segment([Pos2::new(rect.min.x, rect.max.y - 1.0), Pos2::new(rect.max.x, rect.max.y - 1.0)], Stroke::new(1.0, ACCENT));
-                }
-                painter.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    label,
-                    egui::TextStyle::Body.resolve(ui.style()),
-                    if active { FG } else { FG_SECONDARY },
-                );
-                let badge_text = format!("{}", badge);
-                painter.text(
-                    Pos2::new(rect.center().x + galley.size().x * 0.5 + 8.0, rect.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    &badge_text,
-                    egui::TextStyle::Body.resolve(ui.style()),
-                    if active { ACCENT } else { FG_MUTED },
-                );
             }
         }
     });
-    ui.add_space(10.0);
 
     match tab {
         LibraryTab::Fixtures => fixtures_tab(ui, res, patch),
@@ -110,10 +71,9 @@ fn fixtures_tab(
         let mut q: String = ui.ctx().data_mut(|d| {
             d.get_temp_mut_or_insert_with(search_id, String::new).clone()
         });
-        ui.add_sized([(search_width - 24.0).max(0.0), 24.0], egui::TextEdit::singleline(&mut q).hint_text("Search manufacturer, model…"));
+        widgets::search_input(ui, &mut q, "Search manufacturer, model…", search_width);
         ui.ctx().data_mut(|d| d.insert_temp(search_id, q));
     });
-    ui.add_space(8.0);
 
     // List grid
     let header_height = 24.0;
@@ -121,52 +81,59 @@ fn fixtures_tab(
     let ft_count = res.library.all().count();
     let list_height = header_height + row_height * ft_count as f32;
 
-    let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, list_height.min(220.0)), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        painter.rect_filled(rect, 3.0, BG_INPUT);
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
-    }
-
-    egui::ScrollArea::vertical()
-        .max_height(list_height.min(220.0))
-        .auto_shrink([false, false])
+    // Tier 2 #13: Frame wraps scroll area
+    egui::Frame::new()
+        .fill(BG_INPUT)
+        .stroke(Stroke::new(1.0, BORDER_SOFT))
+        .corner_radius(3.0)
+        .inner_margin(egui::Margin::same(0))
         .show(ui, |ui| {
-            // Header
-            ui.horizontal(|ui| {
-                ui.set_min_size(Vec2::new(available_width, header_height));
-                let cols = [available_width * 0.30, available_width * 0.35, 100.0, 60.0];
-                let headers = ["Manufacturer", "Model", "Modes", "Used"];
-                for (i, h) in headers.iter().enumerate() {
-                    ui.label(RichText::new(*h).size(9.0).strong().color(FG_MUTED));
-                    ui.add_space((cols[i] - 40.0).max(0.0));
-                }
-            });
-
-            for ft in res.library.all() {
-                ui.horizontal(|ui| {
-                    ui.set_min_size(Vec2::new(available_width, row_height));
-                    let used = patch.0.fixtures().filter(|f| f.fixture_type_id == ft.fixture_type_id).count();
-                    ui.label(body_row_secondary(&ft.manufacturer));
-                    ui.add_space((available_width * 0.30 - 60.0).max(0.0));
-                    ui.label(body_row(&ft.name));
-                    ui.add_space((available_width * 0.35 - 60.0).max(0.0));
-                    let first_mode_ch = ft.dmx_modes.first().map(|m| m.channels.len()).unwrap_or(0);
-                    ui.label(RichText::new(format!("{} · {}ch", ft.dmx_modes.len(), first_mode_ch)).size(10.0).monospace().color(FG_MUTED));
-                    ui.add_space(60.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if used > 0 {
-                            ui.label(RichText::new(format!("{}", used)).size(11.0).monospace().color(ACCENT));
-                        } else {
-                            ui.label(RichText::new("—").size(11.0).monospace().color(FG_FAINT));
+            egui::ScrollArea::vertical()
+                .id_salt("library_scroll")
+                .max_height(list_height.min(220.0))
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    // Header
+                    ui.horizontal(|ui| {
+                        ui.set_min_size(Vec2::new(available_width, header_height));
+                        let cols = [available_width * 0.30, available_width * 0.35, 100.0, 60.0];
+                        let headers = [("Manufacturer", font_body()), ("Model", font_body()), ("Modes", font_body()), ("Used", font_body())];
+                        for ((h, font_id), col_w) in headers.iter().zip(cols.iter()) {
+                            let rect = ui.available_rect_before_wrap();
+                            ui.painter().text(
+                                Pos2::new(rect.min.x, rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                *h,
+                                font_id.clone(),
+                                FG_MUTED,
+                            );
+                            ui.add_space((col_w - 40.0).max(0.0));
                         }
                     });
-                });
-                ui.painter().line_segment([Pos2::new(ui.min_rect().min.x, ui.cursor().min.y), Pos2::new(ui.min_rect().max.x, ui.cursor().min.y)], Stroke::new(1.0, ROW_BORDER));
-            }
-        });
 
-    ui.add_space(10.0);
+                    for ft in res.library.all() {
+                        ui.horizontal(|ui| {
+                            ui.set_min_size(Vec2::new(available_width, row_height));
+                            let used = patch.0.fixtures().filter(|f| f.fixture_type_id == ft.fixture_type_id).count();
+                            ui.label(body_row_secondary(&ft.manufacturer));
+                            ui.add_space((available_width * 0.30 - 60.0).max(0.0));
+                            ui.label(body_row(&ft.name));
+                            ui.add_space((available_width * 0.35 - 60.0).max(0.0));
+                            let first_mode_ch = ft.dmx_modes.first().map(|m| m.channels.len()).unwrap_or(0);
+                            ui.label(RichText::new(format!("{} · {}ch", ft.dmx_modes.len(), first_mode_ch)).size(10.0).monospace().color(FG_MUTED));
+                            ui.add_space(60.0);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if used > 0 {
+                                    ui.label(RichText::new(format!("{}", used)).size(11.0).monospace().color(ACCENT));
+                                } else {
+                                    ui.label(RichText::new("—").size(11.0).monospace().color(FG_FAINT));
+                                }
+                            });
+                        });
+                        ui.painter().line_segment([Pos2::new(ui.min_rect().min.x, ui.cursor().min.y), Pos2::new(ui.min_rect().max.x, ui.cursor().min.y)], Stroke::new(1.0, ROW_BORDER));
+                    }
+                });
+        });
 
     if widgets::dropzone(ui, "Import GDTF", ".gdtf · browse or type path below") {
         if let Some(path) = rfd::FileDialog::new().add_filter("GDTF", &["gdtf"]).pick_file() {
@@ -174,7 +141,6 @@ fn fixtures_tab(
             load_gdtf(res);
         }
     }
-    ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_sized(
             [(available_width - 70.0).max(0.0), 24.0],
@@ -186,7 +152,6 @@ fn fixtures_tab(
     });
 
     if let Some(ref err) = res.import_error.clone() {
-        ui.add_space(4.0);
         ui.label(error_text(err));
     }
 }
@@ -200,15 +165,7 @@ fn mvr_tab(
     let available_width = ui.available_width();
 
     // Loaded asset card (placeholder)
-    let card_height = 80.0;
-    let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, card_height), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        painter.rect_filled(rect, 3.0, BG_INPUT);
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
-    }
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
-        ui.add_space(12.0);
+    widgets::card(ui, |ui| {
         ui.horizontal(|ui| {
             widgets::status_dot(ui, widgets::DotState::Live);
             ui.label(RichText::new("Tour 2026 — Main Stage.mvr").size(12.0).strong().color(FG));
@@ -218,7 +175,6 @@ fn mvr_tab(
                 }
             });
         });
-        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Embedded GDTFs").size(10.0).monospace().color(FG_MUTED));
             ui.label(RichText::new("7").size(10.0).monospace().color(FG));
@@ -229,15 +185,12 @@ fn mvr_tab(
         });
     });
 
-    ui.add_space(8.0);
-
     if widgets::dropzone(ui, "Import MVR", "loads embedded GDTFs and populates patch") {
         if let Some(path) = rfd::FileDialog::new().add_filter("MVR", &["mvr"]).pick_file() {
             res.mvr_import_path = path.to_string_lossy().to_string();
             load_mvr(res, patch, commands);
         }
     }
-    ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_sized(
             [(available_width - 70.0).max(0.0), 24.0],
@@ -249,7 +202,6 @@ fn mvr_tab(
     });
 
     if let Some(ref err) = res.mvr_import_error.clone() {
-        ui.add_space(4.0);
         ui.label(error_text(err));
     }
 }
@@ -262,15 +214,7 @@ fn venue_tab(
     let available_width = ui.available_width();
 
     // Loaded venue card
-    let card_height = 80.0;
-    let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, card_height), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        painter.rect_filled(rect, 3.0, BG_INPUT);
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
-    }
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
-        ui.add_space(12.0);
+    widgets::card(ui, |ui| {
         ui.horizontal(|ui| {
             widgets::status_dot(ui, widgets::DotState::Tx);
             ui.label(RichText::new("arena-mainstage.glb").size(12.0).strong().color(FG));
@@ -280,7 +224,6 @@ fn venue_tab(
                 }
             });
         });
-        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Format").size(10.0).monospace().color(FG_MUTED));
             ui.label(RichText::new("glTF Binary").size(10.0).monospace().color(FG));
@@ -291,14 +234,11 @@ fn venue_tab(
         });
     });
 
-    ui.add_space(8.0);
-
     if widgets::dropzone(ui, "Replace Venue", "OBJ · GLB · glTF") {
         if let Some(path) = rfd::FileDialog::new().add_filter("Venue", &["obj", "glb", "gltf"]).pick_file() {
             commands.trigger(LoadVenueEvent { path: path.to_string_lossy().to_string() });
         }
     }
-    ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_sized(
             [(available_width - 70.0).max(0.0), 24.0],
@@ -315,7 +255,6 @@ fn venue_tab(
     });
 
     if let Some(ref err) = venue_state.import_error.clone() {
-        ui.add_space(4.0);
         ui.label(error_text(err));
     }
 }

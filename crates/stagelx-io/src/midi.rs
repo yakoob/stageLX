@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use midir::MidiInput;
-use stagelx_state::{IoConfig, Programmer};
+use stagelx_state::{IoConfig, Programmer, ProtocolStatus};
 
 // ─── State (NonSend — MidiInputConnection is !Sync) ───────────────────────────
 
@@ -58,18 +58,18 @@ pub fn midi_manage_connection(
         match open_midi_port(&port_name, tx) {
             Ok(conn) => {
                 info!("MIDI connected: {}", port_name);
-                cfg.midi_status = format!("Connected: {port_name}");
+                cfg.midi_status = ProtocolStatus::Live;
                 state.connection = Some(conn);
             }
-            Err(e) => {
-                cfg.midi_status = format!("Error: {e}");
+            Err(_e) => {
+                cfg.midi_status = ProtocolStatus::Error;
             }
         }
     }
 
     if !want_open && state.connection.is_some() {
         state.connection = None;
-        cfg.midi_status = "Closed".into();
+        cfg.midi_status = ProtocolStatus::Idle;
         info!("MIDI disconnected");
     }
 }

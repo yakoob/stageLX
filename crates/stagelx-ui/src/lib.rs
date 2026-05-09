@@ -7,7 +7,7 @@ pub mod widgets;
 
 use bevy::prelude::*;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass, egui};
-use bevy_egui::egui::{Color32, Pos2, Rect, RichText, Stroke, StrokeKind, TextStyle, Vec2};
+use bevy_egui::egui::{Color32, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
 use std::collections::HashSet;
 
 pub use stagelx_state::{
@@ -31,7 +31,59 @@ pub enum PanelKind {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// New resources
+// App mode
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Resource, Default, PartialEq, Eq, Clone, Copy)]
+pub enum AppMode {
+    Setup,
+    Patch,
+    #[default]
+    Program,
+    Run,
+}
+
+impl AppMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AppMode::Setup => "Setup",
+            AppMode::Patch => "Patch",
+            AppMode::Program => "Program",
+            AppMode::Run => "Run",
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Stub resources for placeholder data
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Resource)]
+pub struct ShowMeta {
+    pub name: String,
+    pub last_saved: std::time::Instant,
+}
+
+impl Default for ShowMeta {
+    fn default() -> Self {
+        Self {
+            name: "tour-2026-mainstage".into(),
+            last_saved: std::time::Instant::now(),
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct RuntimeStats {
+    pub fps: f32,   // TODO(stub)
+    pub cpu_pct: f32, // TODO(stub)
+}
+
+#[derive(Resource, Default)]
+struct FontsInstalled(bool);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Existing resources
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[derive(Resource)]
@@ -92,11 +144,36 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<UiLayoutState>()
             .init_resource::<PatchSelection>()
             .init_resource::<IoPanelState>()
+            .init_resource::<AppMode>()
+            .init_resource::<ShowMeta>()
+            .init_resource::<RuntimeStats>()
+            .init_resource::<FontsInstalled>()
             .add_systems(
                 EguiPrimaryContextPass,
                 ui_root_system,
             );
     }
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "plex_sans".into(),
+        egui::FontData::from_static(include_bytes!("../assets/IBMPlexSans-Regular.ttf")).into(),
+    );
+    fonts.font_data.insert(
+        "plex_mono".into(),
+        egui::FontData::from_static(include_bytes!("../assets/IBMPlexMono-Regular.ttf")).into(),
+    );
+    fonts.families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "plex_sans".into());
+    fonts.families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "plex_mono".into());
+    ctx.set_fonts(fonts);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -114,11 +191,22 @@ fn ui_root_system(
     mut io_cfg: ResMut<IoConfig>,
     mut io_state: ResMut<IoPanelState>,
     mut venue_state: ResMut<VenueLoadState>,
+    mut app_mode: ResMut<AppMode>,
+    show_meta: Res<ShowMeta>,
+    runtime_stats: Res<RuntimeStats>,
+    mut fonts_installed: ResMut<FontsInstalled>,
     mut commands: Commands,
     windows: Query<&Window>,
 ) {
-    let Ok(_window) = windows.single() else { return };
+    let Ok(window) = windows.single() else { return };
+    let scale_factor = window.scale_factor() as f32;
     let egui_ctx = ctx.ctx_mut().expect("egui context");
+    egui_ctx.set_pixels_per_point(scale_factor);
+
+    if !fonts_installed.0 {
+        install_fonts(egui_ctx);
+        fonts_installed.0 = true;
+    }
 
     // Apply global dark style
     let mut style = (*egui_ctx.style()).clone();
@@ -138,6 +226,13 @@ fn ui_root_system(
         spread: 2,
         color: Color32::from_black_alpha(90),
     };
+    // Global spacing override (Tier 1 #2)
+    style.spacing.item_spacing = Vec2::new(6.0, 4.0);
+    style.spacing.button_padding = Vec2::new(8.0, 4.0);
+    style.spacing.interact_size = Vec2::new(0.0, 24.0);
+    style.spacing.icon_width = 12.0;
+    style.spacing.menu_margin = egui::Margin::same(6);
+    style.spacing.window_margin = egui::Margin::same(0);
     egui_ctx.set_style(style);
 
     // ── Top bar ───────────────────────────────────────────────────────────────
@@ -149,9 +244,20 @@ fn ui_root_system(
                 ui.set_min_size(Vec2::new(ui.available_width(), 36.0));
                 ui.add_space(10.0);
 
-                // Wordmark
-                ui.label(wordmark("stage"));
-                ui.label(wordmark_accent("LX"));
+                // Wordmark as single LayoutJob (Tier 1 #5)
+                let mut job = egui::text::LayoutJob::default();
+                job.append("stage", 0.0, egui::TextFormat {
+                    font_id: font_wordmark(),
+                    color: FG,
+                    ..Default::default()
+                });
+                job.append("LX", 0.0, egui::TextFormat {
+                    font_id: font_wordmark(),
+                    color: ACCENT,
+                    ..Default::default()
+                });
+                ui.label(job);
+
                 ui.label(
                     RichText::new("0.1.0")
                         .size(9.0)
@@ -160,56 +266,61 @@ fn ui_root_system(
                 );
                 ui.add_space(14.0);
 
-                // Divider
-                ui.painter().line_segment([Pos2::new(ui.cursor().min.x, ui.cursor().min.y), Pos2::new(ui.cursor().min.x, ui.cursor().min.y + ui.available_height())], Stroke::new(1.0, BORDER_SOFT));
+                // Divider (Tier 1 #6)
+                widgets::vertical_divider(ui, 24.0);
                 ui.add_space(14.0);
 
                 // Show name
                 ui.label(RichText::new("Show").size(11.0).color(FG_MUTED));
-                ui.label(RichText::new("tour-2026-mainstage").size(12.0).color(FG).strong());
+                ui.label(RichText::new(&show_meta.name).size(12.0).color(FG).strong());
                 widgets::status_dot(ui, widgets::DotState::Live);
-                ui.label(RichText::new("SAVED 12s ago").size(9.0).monospace().color(FG_MUTED));
+                let saved_ago = format!("SAVED {}s ago", show_meta.last_saved.elapsed().as_secs());
+                ui.label(RichText::new(saved_ago).size(9.0).monospace().color(FG_MUTED));
                 ui.add_space(14.0);
-                ui.painter().line_segment([Pos2::new(ui.cursor().min.x, ui.cursor().min.y), Pos2::new(ui.cursor().min.x, ui.cursor().min.y + ui.available_height())], Stroke::new(1.0, BORDER_SOFT));
+                widgets::vertical_divider(ui, 24.0);
                 ui.add_space(8.0);
 
-                // Mode tabs
-                let modes = ["Setup", "Patch", "Program", "Run"];
-                for (i, m) in modes.iter().enumerate() {
-                    let active = i == 2; // Program default
-                    let btn = egui::Button::new(mode_tab(*m, active))
+                // Mode tabs (Tier 2 #17)
+                let modes = [AppMode::Setup, AppMode::Patch, AppMode::Program, AppMode::Run];
+                for m in modes {
+                    let active = *app_mode == m;
+                    let label = m.as_str();
+                    let btn = egui::Button::new(mode_tab(label, active))
                         .fill(if active { BG_PANEL } else { Color32::TRANSPARENT })
                         .stroke(if active { Stroke::new(1.0, BORDER) } else { Stroke::NONE })
                         .corner_radius(3.0)
                         .min_size(Vec2::new(0.0, 26.0));
-                    ui.add(btn);
+                    if ui.add(btn).clicked() {
+                        *app_mode = m;
+                    }
                     ui.add_space(2.0);
                 }
 
-                ui.add_space((ui.available_width() - 280.0).max(0.0)); // spacer
+                // Right-aligned section — placed from right edge inward
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Settings gear
+                    if ui.add_sized([24.0, 24.0], egui::Button::new("⚙").fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
+                        // TODO: settings
+                    }
+                    ui.add_space(12.0);
 
-                // Protocol pills
-                widgets::pill(ui, "Art-Net", Some(widgets::DotState::Live));
-                ui.add_space(6.0);
-                widgets::pill(ui, "sACN", Some(widgets::DotState::Live));
-                ui.add_space(6.0);
-                widgets::pill(ui, "USB", Some(widgets::DotState::Warn));
-                ui.add_space(6.0);
-                widgets::pill(ui, "MIDI", Some(widgets::DotState::Idle));
-                ui.add_space(6.0);
-                widgets::pill(ui, "OSC", Some(widgets::DotState::Live));
-                ui.add_space(14.0);
+                    // FPS / CPU (placeholder)
+                    ui.label(RichText::new(format!("CPU {:.0}%", runtime_stats.cpu_pct)).size(10.0).monospace().color(FG_MUTED));
+                    ui.add_space(10.0);
+                    ui.label(RichText::new(format!("FPS {:.1}", runtime_stats.fps)).size(10.0).monospace().color(FG_MUTED));
+                    ui.add_space(14.0);
 
-                // FPS / CPU (placeholder)
-                ui.label(RichText::new("FPS 60.0").size(10.0).monospace().color(FG_MUTED));
-                ui.add_space(10.0);
-                ui.label(RichText::new("CPU 14%").size(10.0).monospace().color(FG_MUTED));
-                ui.add_space(12.0);
-
-                // Settings gear
-                if ui.add_sized([24.0, 24.0], egui::Button::new("⚙").fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
-                    // TODO: settings
-                }
+                    // Protocol pills
+                    widgets::pill(ui, "OSC", Some(widgets::DotState::Live));
+                    ui.add_space(6.0);
+                    widgets::pill(ui, "MIDI", Some(widgets::DotState::Idle));
+                    ui.add_space(6.0);
+                    widgets::pill(ui, "USB", Some(widgets::DotState::Warn));
+                    ui.add_space(6.0);
+                    widgets::pill(ui, "sACN", Some(widgets::DotState::Live));
+                    ui.add_space(6.0);
+                    widgets::pill(ui, "Art-Net", Some(widgets::DotState::Live));
+                });
             });
         });
 
@@ -227,15 +338,18 @@ fn ui_root_system(
                     let count = patch.0.len();
                     ui.label(status_bar_text(format!("{} patched", count)));
                     ui.label(status_bar_text("·"));
-                    ui.label(status_bar_text("U1 81/512"));
+                    ui.label(status_bar_text("U1 81/512")); // TODO(stub): derive from PatchRes
                     ui.label(status_bar_text("·"));
-                    ui.label(status_bar_text("U2 65/512"));
-                    ui.add_space((ui.available_width() - 200.0).max(0.0));
-                    ui.label(status_bar_text("arena-mainstage.glb"));
-                    ui.label(status_bar_text("·"));
-                    ui.label(RichText::new("● record armed").size(10.0).monospace().color(RX));
-                    ui.label(status_bar_text("·"));
-                    ui.label(status_bar_text("BPM 128.0"));
+                    ui.label(status_bar_text("U2 65/512")); // TODO(stub): derive from PatchRes
+
+                    // Right-aligned section
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(status_bar_text("BPM 128.0")); // TODO(stub)
+                        ui.label(status_bar_text("·"));
+                        ui.label(RichText::new("● record armed").size(10.0).monospace().color(RX));
+                        ui.label(status_bar_text("·"));
+                        ui.label(status_bar_text("arena-mainstage.glb")); // TODO(stub)
+                    });
                 });
             });
     }
@@ -248,7 +362,7 @@ fn ui_root_system(
             .show(egui_ctx, |ui| {
                 // Rail header
                 ui.horizontal(|ui| {
-                    ui.set_min_size(Vec2::new(ui.available_width(), 28.0));
+                    ui.set_min_size(Vec2::new(0.0, 28.0));
                     ui.add_space(10.0);
                     ui.label(RichText::new("Programmer").size(10.0).strong().color(FG_SECONDARY));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -261,10 +375,14 @@ fn ui_root_system(
                         }
                     });
                 });
-                ui.painter().line_segment([Pos2::new(ui.min_rect().min.x, ui.cursor().min.y), Pos2::new(ui.min_rect().max.x, ui.cursor().min.y)], Stroke::new(1.0, BORDER));
+                // 1-px hairline border (Tier 1 #7)
+                let p = ui.available_rect_before_wrap();
+                ui.painter().line_segment(
+                    [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                    Stroke::new(1.0, BORDER),
+                );
 
                 if !layout.minimized.contains(&PanelKind::Programmer) {
-                    ui.add_space(8.0);
                     programmer::programmer_panel_docked(ui, &mut prog, &patch_sel, &patch);
                 }
             });
@@ -277,7 +395,7 @@ fn ui_root_system(
             .frame(egui::Frame::new().fill(BG_CHROME).inner_margin(egui::Margin::same(0)))
             .show(egui_ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.set_min_size(Vec2::new(ui.available_width(), 28.0));
+                    ui.set_min_size(Vec2::new(0.0, 28.0));
                     ui.add_space(10.0);
                     ui.label(RichText::new("DMX I/O").size(10.0).strong().color(FG_SECONDARY));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -290,10 +408,13 @@ fn ui_root_system(
                         }
                     });
                 });
-                ui.painter().line_segment([Pos2::new(ui.min_rect().min.x, ui.cursor().min.y), Pos2::new(ui.min_rect().max.x, ui.cursor().min.y)], Stroke::new(1.0, BORDER));
+                let p = ui.available_rect_before_wrap();
+                ui.painter().line_segment(
+                    [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                    Stroke::new(1.0, BORDER),
+                );
 
                 if !layout.minimized.contains(&PanelKind::Io) {
-                    ui.add_space(8.0);
                     io_panel::io_panel_docked(ui, &mut io_cfg, &mut io_state);
                 }
             });
@@ -301,7 +422,7 @@ fn ui_root_system(
 
     // ── Central panel (viewports + bottom strip) ──────────────────────────────
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(BG_APP))
+        .frame(egui::Frame::new().fill(Color32::TRANSPARENT))
         .show(egui_ctx, |ui| {
             let full_rect = ui.available_rect_before_wrap();
             let bottom_height = 248.0f32;
@@ -320,21 +441,20 @@ fn ui_root_system(
                 let split_x = avail.x * 0.75;
                 let split_y = avail.y * 0.5;
 
-                // FOH viewport background
+                // FOH viewport — labels only; 3D renders underneath
                 let foh_rect = Rect::from_min_size(full_rect.min, Vec2::new(split_x, avail.y));
-                ui.painter().rect_filled(foh_rect, 0.0, BG_APP);
                 ui.painter().text(
                     Pos2::new(foh_rect.min.x + 12.0, foh_rect.min.y + 10.0),
                     egui::Align2::LEFT_TOP,
                     "FOH",
-                    TextStyle::Body.resolve(ui.style()),
+                    font_eyebrow(),
                     ACCENT,
                 );
                 ui.painter().text(
                     Pos2::new(foh_rect.min.x + 12.0 + 36.0, foh_rect.min.y + 10.0),
                     egui::Align2::LEFT_TOP,
                     "35mm · persp",
-                    TextStyle::Body.resolve(ui.style()),
+                    font_hint(),
                     FG_MUTED,
                 );
 
@@ -344,23 +464,22 @@ fn ui_root_system(
                     Vec2::new(128.0, 24.0),
                 );
                 ui.painter().rect_filled(toolbar_rect, 3.0, Color32::from_rgba_premultiplied(13, 15, 16, 217));
-                ui.painter().rect_stroke(toolbar_rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+                ui.painter().rect_stroke(toolbar_rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Inside);
 
                 // Hint
                 ui.painter().text(
                     Pos2::new(foh_rect.max.x - 12.0, foh_rect.max.y - 10.0),
                     egui::Align2::RIGHT_BOTTOM,
                     "SHIFT-drag orbit · scroll zoom",
-                    TextStyle::Body.resolve(ui.style()),
+                    font_hint(),
                     FG_FAINT,
                 );
 
-                // TOP viewport
+                // TOP viewport — labels only; 3D renders underneath
                 let top_rect = Rect::from_min_size(
                     Pos2::new(full_rect.min.x + split_x, full_rect.min.y),
                     Vec2::new(avail.x - split_x, split_y),
                 );
-                ui.painter().rect_filled(top_rect, 0.0, BG_APP);
                 ui.painter().line_segment(
                     [top_rect.min, Pos2::new(top_rect.min.x, top_rect.max.y)],
                     Stroke::new(1.0, BORDER),
@@ -369,23 +488,22 @@ fn ui_root_system(
                     Pos2::new(top_rect.min.x + 12.0, top_rect.min.y + 10.0),
                     egui::Align2::LEFT_TOP,
                     "TOP",
-                    TextStyle::Body.resolve(ui.style()),
+                    font_eyebrow(),
                     ACCENT,
                 );
                 ui.painter().text(
                     Pos2::new(top_rect.min.x + 12.0 + 32.0, top_rect.min.y + 10.0),
                     egui::Align2::LEFT_TOP,
                     "ortho",
-                    TextStyle::Body.resolve(ui.style()),
+                    font_hint(),
                     FG_MUTED,
                 );
 
-                // SIDE viewport
+                // SIDE viewport — labels only; 3D renders underneath
                 let side_rect = Rect::from_min_size(
                     Pos2::new(full_rect.min.x + split_x, full_rect.min.y + split_y),
                     Vec2::new(avail.x - split_x, avail.y - split_y),
                 );
-                ui.painter().rect_filled(side_rect, 0.0, BG_APP);
                 ui.painter().line_segment(
                     [side_rect.min, Pos2::new(side_rect.max.x, side_rect.min.y)],
                     Stroke::new(1.0, BORDER),
@@ -398,20 +516,21 @@ fn ui_root_system(
                     Pos2::new(side_rect.min.x + 12.0, side_rect.min.y + 10.0),
                     egui::Align2::LEFT_TOP,
                     "SIDE",
-                    TextStyle::Body.resolve(ui.style()),
+                    font_eyebrow(),
                     ACCENT,
                 );
                 ui.painter().text(
                     Pos2::new(side_rect.min.x + 12.0 + 36.0, side_rect.min.y + 10.0),
                     egui::Align2::LEFT_TOP,
                     "ortho",
-                    TextStyle::Body.resolve(ui.style()),
+                    font_hint(),
                     FG_MUTED,
                 );
             });
 
             // Bottom strip: Patch + Library
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bottom_rect), |ui| {
+                ui.painter().rect_filled(bottom_rect, 0.0, BG_APP);
                 ui.painter().line_segment([Pos2::new(bottom_rect.min.x, bottom_rect.min.y), Pos2::new(bottom_rect.max.x, bottom_rect.min.y)], Stroke::new(1.0, BORDER));
                 let avail = ui.available_size();
                 let patch_width = avail.x * 1.4 / 2.4;
@@ -433,9 +552,12 @@ fn ui_root_system(
                             }
                         });
                     });
-                    ui.painter().line_segment([Pos2::new(patch_rect.min.x, ui.cursor().min.y), Pos2::new(patch_rect.max.x, ui.cursor().min.y)], Stroke::new(1.0, BORDER));
+                    let p = ui.available_rect_before_wrap();
+                    ui.painter().line_segment(
+                        [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                        Stroke::new(1.0, BORDER),
+                    );
                     if !layout.minimized.contains(&PanelKind::Patch) {
-                        ui.add_space(8.0);
                         patch::patch_panel_docked(
                             ui,
                             &mut patch,
@@ -471,9 +593,12 @@ fn ui_root_system(
                             }
                         });
                     });
-                    ui.painter().line_segment([Pos2::new(lib_rect.min.x, ui.cursor().min.y), Pos2::new(lib_rect.max.x, ui.cursor().min.y)], Stroke::new(1.0, BORDER));
+                    let p = ui.available_rect_before_wrap();
+                    ui.painter().line_segment(
+                        [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                        Stroke::new(1.0, BORDER),
+                    );
                     if !layout.minimized.contains(&PanelKind::Library) {
-                        ui.add_space(8.0);
                         library::library_panel_docked(
                             ui,
                             &mut library,

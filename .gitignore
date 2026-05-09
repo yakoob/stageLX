@@ -2,3 +2,5 @@
 Cargo.lock
 *.gdtf
 *.mvr
+.DS_Store
+*.zip

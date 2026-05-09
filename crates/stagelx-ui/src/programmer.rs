@@ -6,11 +6,6 @@ use crate::widgets;
 use crate::{PatchRes, PatchSelection};
 use stagelx_state::Programmer;
 
-// Legacy entry point (no longer registered as a system, kept for API compat)
-pub fn programmer_panel(mut _ctx: bevy_egui::EguiContexts, mut _prog: ResMut<Programmer>) {
-    // Obsolete — all UI now routes through ui_root_system in lib.rs
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // Programmer Panel (docked / inline)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -22,7 +17,6 @@ pub fn programmer_panel_docked(
     patch: &PatchRes,
 ) {
     let available_width = ui.available_width();
-    ui.set_min_width(available_width);
 
     // ── Selection bar ─────────────────────────────────────────────────────────
     {
@@ -31,7 +25,7 @@ pub fn programmer_panel_docked(
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             painter.rect_filled(rect, 3.0, BG_INPUT);
-            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Inside);
 
             let mut cursor_x = rect.min.x + 8.0;
             let center_y = rect.center().y;
@@ -52,12 +46,12 @@ pub fn programmer_panel_docked(
                 Pos2::new(cursor_x, center_y),
                 egui::Align2::LEFT_CENTER,
                 &ids_text,
-                egui::TextStyle::Body.resolve(ui.style()),
+                font_body(),
                 FG,
             );
             let ids_width = ui.painter().layout_no_wrap(
                 ids_text.clone(),
-                egui::TextStyle::Body.resolve(ui.style()),
+                font_body(),
                 FG,
             ).size().x;
             cursor_x += ids_width + 10.0;
@@ -76,7 +70,7 @@ pub fn programmer_panel_docked(
                 Pos2::new(cursor_x, center_y),
                 egui::Align2::LEFT_CENTER,
                 &names_text,
-                egui::TextStyle::Body.resolve(ui.style()),
+                font_body(),
                 FG_MUTED,
             );
 
@@ -86,32 +80,32 @@ pub fn programmer_panel_docked(
                 Pos2::new(rect.max.x - 8.0, center_y),
                 egui::Align2::RIGHT_CENTER,
                 &count_text,
-                egui::TextStyle::Body.resolve(ui.style()),
+                font_status(),
                 FG_MUTED,
             );
         }
-        ui.add_space(12.0);
     }
 
     // ── Intensity ─────────────────────────────────────────────────────────────
     widgets::section_header(ui, "Intensity", Some("0–100%"));
     ui.horizontal(|ui| {
         ui.add_space(((available_width - 80.0) * 0.5).max(0.0));
-        let mut dimmer_pct = prog.dimmer;
-        ui.add(widgets::Fader::new(&mut dimmer_pct, "Dimmer").unit("%"));
-        prog.dimmer = dimmer_pct;
+        let mut dimmer_pct = prog.dimmer * 100.0;
+        ui.add(widgets::Fader::new(&mut dimmer_pct, "Dimmer")
+            .unit("%")
+            .range(0.0, 100.0)
+            .format(|v| format!("{:.0}", v)));
+        prog.dimmer = dimmer_pct / 100.0;
+
         ui.add_space(24.0);
-        let strobe_norm = prog.strobe;
-        let mut strobe_pct = strobe_norm * 100.0;
-        ui.add(widgets::Fader::new(&mut strobe_pct, "Strobe").unit("Hz").accent(WARNING));
-        if strobe_pct < 1.0 {
-            // Keep as 0 for OFF display
-            prog.strobe = 0.0;
-        } else {
-            prog.strobe = strobe_pct / 100.0;
-        }
+        let mut strobe_hz = prog.strobe * 25.0;
+        ui.add(widgets::Fader::new(&mut strobe_hz, "Strobe")
+            .unit("Hz")
+            .range(0.0, 25.0)
+            .format(|v| if v < 0.5 { "OFF".into() } else { format!("{:.0}", v) })
+            .accent(WARNING));
+        prog.strobe = strobe_hz / 25.0;
     });
-    ui.add_space(14.0);
 
     // ── Position ──────────────────────────────────────────────────────────────
     widgets::section_header(ui, "Position", Some("±270° / ±135°"));
@@ -119,22 +113,38 @@ pub fn programmer_panel_docked(
         ui.add_space(((available_width - 250.0) * 0.5).max(0.0));
         let pan_deg = (prog.pan - 0.5) * prog.pan_range;
         let mut pan_val = pan_deg;
-        ui.add(widgets::Encoder::new(&mut pan_val, "Pan").range(-270.0, 270.0).decimals(1).unit("°").sub("ABS"));
+        ui.add(widgets::Encoder::new(&mut pan_val, "Pan")
+            .range(-270.0, 270.0)
+            .default_value(0.0)
+            .decimals(1)
+            .unit("°")
+            .sub("ABS"));
         prog.pan = (pan_val / prog.pan_range) + 0.5;
+
         ui.add_space(14.0);
 
         let tilt_deg = (prog.tilt - 0.5) * prog.tilt_range;
         let mut tilt_val = tilt_deg;
-        ui.add(widgets::Encoder::new(&mut tilt_val, "Tilt").range(-135.0, 135.0).decimals(1).unit("°").sub("ABS"));
+        ui.add(widgets::Encoder::new(&mut tilt_val, "Tilt")
+            .range(-135.0, 135.0)
+            .default_value(0.0)
+            .decimals(1)
+            .unit("°")
+            .sub("ABS"));
         prog.tilt = (tilt_val / prog.tilt_range) + 0.5;
+
         ui.add_space(14.0);
 
         let zoom_deg = 5.0 + prog.zoom * 40.0;
         let mut zoom_val = zoom_deg;
-        ui.add(widgets::Encoder::new(&mut zoom_val, "Zoom").range(5.0, 45.0).decimals(0).unit("°").sub("BEAM"));
+        ui.add(widgets::Encoder::new(&mut zoom_val, "Zoom")
+            .range(5.0, 45.0)
+            .default_value(25.0)
+            .decimals(0)
+            .unit("°")
+            .sub("BEAM"));
         prog.zoom = (zoom_val - 5.0) / 40.0;
     });
-    ui.add_space(14.0);
 
     // ── Colour ────────────────────────────────────────────────────────────────
     let color_presets: &[(&str, [f32; 3])] = &[
@@ -164,7 +174,6 @@ pub fn programmer_panel_docked(
             ui.label(hint_secondary(format!("{}·{}·{}", (r*255.0) as u8, (g*255.0) as u8, (b*255.0) as u8)));
         });
     });
-    ui.add_space(8.0);
 
     // Active color row
     {
@@ -173,7 +182,7 @@ pub fn programmer_panel_docked(
         if ui.is_rect_visible(rect) {
             let painter = ui.painter();
             painter.rect_filled(rect, 3.0, BG_INPUT);
-            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Inside);
 
             let [r, g, b] = prog.color;
             let swatch_rect = Rect::from_min_size(
@@ -181,20 +190,20 @@ pub fn programmer_panel_docked(
                 Vec2::splat(22.0),
             );
             painter.rect_filled(swatch_rect, 2.0, Color32::from_rgb((r*255.0) as u8, (g*255.0) as u8, (b*255.0) as u8));
-            painter.rect_stroke(swatch_rect, 2.0, Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 102)), StrokeKind::Middle);
+            painter.rect_stroke(swatch_rect, 2.0, Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 102)), StrokeKind::Inside);
 
             painter.text(
                 Pos2::new(rect.min.x + 38.0, rect.center().y - 4.0),
                 egui::Align2::LEFT_CENTER,
                 preset_name,
-                egui::TextStyle::Body.resolve(ui.style()),
+                font_body(),
                 FG,
             );
             painter.text(
                 Pos2::new(rect.min.x + 38.0, rect.center().y + 8.0),
                 egui::Align2::LEFT_CENTER,
                 &format!("#{:02X}{:02X}{:02X}", (r*255.0) as u8, (g*255.0) as u8, (b*255.0) as u8),
-                egui::TextStyle::Body.resolve(ui.style()),
+                font_hint(),
                 FG_MUTED,
             );
         }
@@ -211,7 +220,6 @@ pub fn programmer_panel_docked(
         if pick_clicked {
             // TODO: open colour picker popover
         }
-        ui.add_space(8.0);
     }
 
     // Swatch grid — reuses color_presets defined above
@@ -239,7 +247,6 @@ pub fn programmer_panel_docked(
     if let Some(c) = selected_swatch {
         prog.color = c;
     }
-    ui.add_space(14.0);
 
     // ── Gobo ──────────────────────────────────────────────────────────────────
     widgets::section_header(ui, "Gobo", Some("wheel 1 · 4 slots"));
@@ -256,7 +263,7 @@ pub fn programmer_panel_docked(
             if ui.is_rect_visible(rect) {
                 let painter = ui.painter();
                 painter.rect_filled(rect, 3.0, if selected { BG_RAISED } else { BG_INPUT });
-                painter.rect_stroke(rect, 3.0, Stroke::new(1.0, if selected { ACCENT_DIM } else { BORDER_SOFT }), StrokeKind::Middle);
+                painter.rect_stroke(rect, 3.0, Stroke::new(1.0, if selected { ACCENT_DIM } else { BORDER_SOFT }), StrokeKind::Inside);
 
                 // Simple SVG-like glyphs
                 let cx = rect.center().x;
@@ -295,7 +302,7 @@ pub fn programmer_panel_docked(
                     Pos2::new(rect.center().x, rect.max.y - 4.0),
                     egui::Align2::CENTER_BOTTOM,
                     name,
-                    egui::TextStyle::Body.resolve(ui.style()),
+                    font_body(),
                     if selected { FG } else { FG_SECONDARY },
                 );
             }
@@ -315,7 +322,7 @@ pub fn programmer_panel_docked(
             let painter = ui.painter();
             let track_rect = Rect::from_min_size(Pos2::new(rect.min.x, rect.min.y + 4.0), Vec2::new(slider_width, 4.0));
             painter.rect_filled(track_rect, 2.0, BG_INPUT);
-            painter.rect_stroke(track_rect, 2.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+            painter.rect_stroke(track_rect, 2.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Inside);
             // Center detent
             painter.line_segment([Pos2::new(track_rect.center().x, track_rect.min.y), Pos2::new(track_rect.center().x, track_rect.max.y)], Stroke::new(1.0, BORDER_STRONG));
             // Fill from center
@@ -337,11 +344,14 @@ pub fn programmer_panel_docked(
         };
         ui.label(RichText::new(spin_text).size(11.0).monospace().color(FG));
     });
-    ui.add_space(14.0);
 
     // ── Quick actions ─────────────────────────────────────────────────────────
-    ui.painter().line_segment([Pos2::new(ui.min_rect().min.x, ui.cursor().min.y), Pos2::new(ui.min_rect().max.x, ui.cursor().min.y)], Stroke::new(1.0, BORDER_SOFT));
-    ui.add_space(8.0);
+    // Tier 1 #6: divider positioned properly
+    let divider_rect = ui.available_rect_before_wrap();
+    ui.painter().line_segment(
+        [Pos2::new(divider_rect.min.x, divider_rect.min.y), Pos2::new(divider_rect.max.x, divider_rect.min.y)],
+        Stroke::new(1.0, BORDER_SOFT),
+    );
     ui.horizontal(|ui| {
         let btn_width = (available_width - 12.0) / 4.0;
         if ui.add_sized([btn_width, 24.0], egui::Button::new("Black").fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).clicked() {
@@ -359,7 +369,6 @@ pub fn programmer_panel_docked(
             *prog = Programmer::default();
         }
     });
-    ui.add_space(8.0);
 
     // Hotkey hint
     ui.horizontal(|ui| {

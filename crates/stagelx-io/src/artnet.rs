@@ -7,7 +7,7 @@ use std::{
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::IoConfig;
+use stagelx_state::{IoConfig, ProtocolStatus};
 
 use crate::supervisor::IoSupervisor;
 
@@ -83,6 +83,8 @@ pub struct ArtNetState {
     cached_allowlist_src: String,
     /// Shared drop counter incremented by the RX thread when the channel is full.
     pub rx_drops: Arc<AtomicU64>,
+    /// Throttle bind retries to avoid log-spam when the port is busy.
+    last_bind_attempt: Option<std::time::Instant>,
 }
 
 impl Default for ArtNetState {
@@ -94,6 +96,7 @@ impl Default for ArtNetState {
             cached_allowlist: Vec::new(),
             cached_allowlist_src: String::new(),
             rx_drops: Arc::new(AtomicU64::new(0)),
+            last_bind_attempt: None,
         }
     }
 }
@@ -107,20 +110,27 @@ pub fn artnet_manage_socket(
     supervisor: Res<IoSupervisor>,
 ) {
     if state.socket.is_none() {
-        let bind_ip: IpAddr = cfg
-            .artnet_ip
-            .trim()
-            .parse()
-            .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-        let bind_addr = SocketAddr::new(bind_ip, ARTNET_PORT);
-        match UdpSocket::bind(bind_addr) {
-            Ok(sock) => {
-                sock.set_nonblocking(true).ok();
-                sock.set_broadcast(true).ok();
-                info!("Art-Net socket bound to {}", bind_addr);
-                state.socket = Some(sock);
+        let now = std::time::Instant::now();
+        let should_try = state.last_bind_attempt.map_or(true, |t| {
+            now.duration_since(t).as_secs_f32() >= 1.0
+        });
+        if should_try {
+            state.last_bind_attempt = Some(now);
+            let bind_ip: IpAddr = cfg
+                .artnet_ip
+                .trim()
+                .parse()
+                .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+            let bind_addr = SocketAddr::new(bind_ip, ARTNET_PORT);
+            match UdpSocket::bind(bind_addr) {
+                Ok(sock) => {
+                    sock.set_nonblocking(true).ok();
+                    sock.set_broadcast(true).ok();
+                    info!("Art-Net socket bound to {}", bind_addr);
+                    state.socket = Some(sock);
+                }
+                Err(e) => warn!("Art-Net bind failed: {e}"),
             }
-            Err(e) => warn!("Art-Net bind failed: {e}"),
         }
     }
 
@@ -271,11 +281,11 @@ pub fn artnet_send(
         match sock.send_to(&pkt, dest) {
             Ok(_) => {
                 cfg.artnet_tx_count = cfg.artnet_tx_count.saturating_add(1);
-                cfg.artnet_status = format!("TX u{} → {}", out_universe, dest_ip);
+                cfg.artnet_status = ProtocolStatus::Live;
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => {
-                cfg.artnet_status = format!("TX error: {e}");
+            Err(_e) => {
+                cfg.artnet_status = ProtocolStatus::Error;
             }
         }
     }

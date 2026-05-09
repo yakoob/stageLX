@@ -17,7 +17,7 @@ use std::{
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::IoConfig;
+use stagelx_state::{IoConfig, ProtocolStatus};
 
 use crate::supervisor::IoSupervisor;
 
@@ -142,6 +142,8 @@ pub struct SacnState {
     sequence: u8,
     /// Shared drop counter incremented by the RX thread when the channel is full.
     pub rx_drops: Arc<AtomicU64>,
+    /// Throttle bind retries to avoid log-spam when the port is busy.
+    last_bind_attempt: Option<std::time::Instant>,
 }
 
 impl Default for SacnState {
@@ -152,6 +154,7 @@ impl Default for SacnState {
             rx_thread_tx: None,
             sequence: 0,
             rx_drops: Arc::new(AtomicU64::new(0)),
+            last_bind_attempt: None,
         }
     }
 }
@@ -167,15 +170,22 @@ pub fn sacn_manage_socket(
     let wants_io = cfg.sacn_tx_enabled || cfg.sacn_rx_enabled;
 
     if wants_io && state.socket.is_none() {
-        let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), SACN_PORT);
-        match UdpSocket::bind(bind_addr) {
-            Ok(sock) => {
-                sock.set_nonblocking(true).ok();
-                sock.set_broadcast(true).ok();
-                info!("sACN socket bound to {}", bind_addr);
-                state.socket = Some(sock);
+        let now = std::time::Instant::now();
+        let should_try = state.last_bind_attempt.map_or(true, |t| {
+            now.duration_since(t).as_secs_f32() >= 1.0
+        });
+        if should_try {
+            state.last_bind_attempt = Some(now);
+            let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), SACN_PORT);
+            match UdpSocket::bind(bind_addr) {
+                Ok(sock) => {
+                    sock.set_nonblocking(true).ok();
+                    sock.set_broadcast(true).ok();
+                    info!("sACN socket bound to {}", bind_addr);
+                    state.socket = Some(sock);
+                }
+                Err(e) => warn!("sACN bind failed: {e}"),
             }
-            Err(e) => warn!("sACN bind failed: {e}"),
         }
     }
 
@@ -314,11 +324,11 @@ pub fn sacn_send(
         match sock.send_to(&pkt, dest) {
             Ok(_) => {
                 cfg.sacn_tx_count = cfg.sacn_tx_count.saturating_add(1);
-                cfg.sacn_status = format!("TX u{} → {}", universe, dest_ip);
+                cfg.sacn_status = ProtocolStatus::Live;
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => {
-                cfg.sacn_status = format!("TX error: {e}");
+            Err(_e) => {
+                cfg.sacn_status = ProtocolStatus::Error;
             }
         }
     }

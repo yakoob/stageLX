@@ -1,6 +1,6 @@
 use bevy_egui::egui::{
     self, Color32, Pos2, StrokeKind, Rect, Response, RichText, Sense, Shape, Stroke,
-    TextStyle, Ui, Vec2, Widget,
+    Ui, Vec2, Widget,
 };
 
 use crate::theme::*;
@@ -70,7 +70,61 @@ pub fn section_header(ui: &mut Ui, label: &str, hint: Option<&str>) {
             ui.add_space(0.0);
         });
     });
-    ui.add_space(8.0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Vertical divider (Tier 1 #6)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub fn vertical_divider(ui: &mut Ui, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, height), Sense::hover());
+    ui.painter().line_segment(
+        [Pos2::new(rect.center().x, rect.min.y), Pos2::new(rect.center().x, rect.max.y)],
+        Stroke::new(1.0, BORDER_SOFT));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Search input with drawn magnifier (Tier 1 #9)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub fn search_input(ui: &mut Ui, query: &mut String, hint: &str, width: f32) -> Response {
+    let frame = egui::Frame::new()
+        .fill(BG_INPUT)
+        .stroke(Stroke::new(1.0, BORDER_SOFT))
+        .corner_radius(3.0)
+        .inner_margin(egui::Margin::symmetric(7, 4));
+    frame.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.set_min_size(Vec2::new(width, 24.0));
+            // 12-px magnifier glyph (circle + handle)
+            let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+            if ui.is_rect_visible(icon_rect) {
+                let p = ui.painter();
+                let c = icon_rect.center();
+                p.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), 3.5, Stroke::new(1.2, FG_MUTED));
+                p.line_segment(
+                    [Pos2::new(c.x + 1.5, c.y + 1.5), Pos2::new(c.x + 4.0, c.y + 4.0)],
+                    Stroke::new(1.2, FG_MUTED),
+                );
+            }
+            ui.add_space(4.0);
+            let edit_width = (width - 24.0).max(1.0);
+            ui.add_sized([edit_width, 16.0], egui::TextEdit::singleline(query).hint_text(hint))
+        }).inner
+    }).inner
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Card helper (Tier 3 #18)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub fn card(ui: &mut Ui, content: impl FnOnce(&mut Ui)) {
+    egui::Frame::new()
+        .fill(BG_INPUT)
+        .stroke(Stroke::new(1.0, BORDER_SOFT))
+        .corner_radius(3.0)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, content);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -88,7 +142,7 @@ pub fn pill(ui: &mut Ui, label: impl Into<String>, state: Option<DotState>) -> R
     let desired_size = {
         let galley = ui.painter().layout_no_wrap(
             label.clone(),
-            TextStyle::Body.resolve(ui.style()),
+            font_body(),
             text_color,
         );
         let width = galley.size().x
@@ -101,7 +155,7 @@ pub fn pill(ui: &mut Ui, label: impl Into<String>, state: Option<DotState>) -> R
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect_filled(rect, 9.0, bg);
-        painter.rect_stroke(rect, 9.0, Stroke::new(1.0, border), StrokeKind::Middle);
+        painter.rect_stroke(rect, 9.0, Stroke::new(1.0, border), StrokeKind::Inside);
 
         let mut cursor = rect.min.x + 7.0;
         if let Some(st) = state {
@@ -115,8 +169,8 @@ pub fn pill(ui: &mut Ui, label: impl Into<String>, state: Option<DotState>) -> R
         painter.text(
             Pos2::new(cursor, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            &label.clone(),
-            TextStyle::Body.resolve(ui.style()),
+            &label,
+            font_body(),
             text_color,
         );
     }
@@ -124,16 +178,14 @@ pub fn pill(ui: &mut Ui, label: impl Into<String>, state: Option<DotState>) -> R
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Toggle (pill switch)
+// Toggle (pill switch) — Tier 1 #8
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let id = ui.id().with(label);
-    let desired_size = Vec2::new(
-        ui.painter().layout_no_wrap(label.to_string(), TextStyle::Body.resolve(ui.style()), FG).size().x + 32.0,
-        22.0,
-    );
-    let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+    let track_width = 32.0f32;
+    let track_height = 22.0f32;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(track_width, track_height), Sense::click());
 
     if response.clicked() {
         *on = !*on;
@@ -155,7 +207,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         let bg = if *on { ACCENT_BG } else { BG_INPUT };
         let border_color = if *on { ACCENT_DIM } else { BORDER_SOFT };
         painter.rect_filled(rect, 3.0, bg);
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, border_color), StrokeKind::Middle);
+        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, border_color), StrokeKind::Inside);
 
         // Track
         let track_rect = Rect::from_center_size(
@@ -171,18 +223,16 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             3.0,
             if *on { Color32::WHITE } else { FG_MUTED },
         );
-
-        // Label
-        let text_color = if *on { ACCENT } else { FG_MUTED };
-        painter.text(
-            Pos2::new(rect.min.x + 34.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            label.to_uppercase(),
-            TextStyle::Body.resolve(ui.style()),
-            text_color,
-        );
     }
-    response
+
+    // Label as sibling outside the track rect
+    let text_color = if *on { ACCENT } else { FG_MUTED };
+    ui.add_space(4.0);
+    let label_response = ui.add(egui::Label::new(
+        RichText::new(label.to_uppercase()).size(11.0).color(text_color)
+    ).selectable(false));
+
+    response | label_response
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -203,7 +253,7 @@ pub fn banner(ui: &mut Ui, state: DotState, message: &str) -> Response {
             _ => BORDER_SOFT,
         };
         painter.rect_filled(rect, 3.0, bg);
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, border_color), StrokeKind::Middle);
+        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, border_color), StrokeKind::Inside);
 
         let mut cursor_x = rect.min.x + 8.0;
         let center_y = rect.center().y;
@@ -222,7 +272,7 @@ pub fn banner(ui: &mut Ui, state: DotState, message: &str) -> Response {
             Pos2::new(cursor_x, center_y),
             egui::Align2::LEFT_CENTER,
             message,
-            TextStyle::Body.resolve(ui.style()),
+            font_body(),
             text_color,
         );
     }
@@ -248,22 +298,22 @@ pub fn swatch(
         let painter = ui.painter();
         if selected {
             painter.rect_filled(rect, 3.0, BG_RAISED);
-            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, ACCENT_DIM), StrokeKind::Middle);
+            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, ACCENT_DIM), StrokeKind::Inside);
         }
         let chip_rect = Rect::from_center_size(
             Pos2::new(rect.center().x, rect.min.y + 12.0),
             Vec2::new(28.0, 18.0),
         );
         painter.rect_filled(chip_rect, 2.0, color);
-        painter.rect_stroke(chip_rect, 2.0, Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 102)), StrokeKind::Middle);
+        painter.rect_stroke(chip_rect, 2.0, Stroke::new(1.0, Color32::from_rgba_premultiplied(0, 0, 0, 102)), StrokeKind::Inside);
         if selected {
-            painter.rect_stroke(chip_rect, 2.0, Stroke::new(1.0, ACCENT), StrokeKind::Middle);
+            painter.rect_stroke(chip_rect, 2.0, Stroke::new(1.0, ACCENT), StrokeKind::Inside);
         }
         painter.text(
             Pos2::new(rect.center().x, rect.max.y - 2.0),
             egui::Align2::CENTER_BOTTOM,
             label,
-            TextStyle::Body.resolve(ui.style()),
+            font_body(),
             if selected { FG } else { FG_MUTED },
         );
     }
@@ -271,13 +321,16 @@ pub fn swatch(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Fader
+// Fader — Tier 1 #10
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub struct Fader<'a> {
     pub value: &'a mut f32,
+    pub min: f32,
+    pub max: f32,
     pub label: &'a str,
     pub unit: &'a str,
+    pub format: fn(f32) -> String,
     pub accent: Color32,
     pub height: f32,
 }
@@ -286,15 +339,29 @@ impl<'a> Fader<'a> {
     pub fn new(value: &'a mut f32, label: &'a str) -> Self {
         Self {
             value,
+            min: 0.0,
+            max: 100.0,
             label,
             unit: "%",
+            format: |v| format!("{:.0}", v),
             accent: ACCENT,
             height: 130.0,
         }
     }
 
+    pub fn range(mut self, min: f32, max: f32) -> Self {
+        self.min = min;
+        self.max = max;
+        self
+    }
+
     pub fn unit(mut self, unit: &'a str) -> Self {
         self.unit = unit;
+        self
+    }
+
+    pub fn format(mut self, f: fn(f32) -> String) -> Self {
+        self.format = f;
         self
     }
 
@@ -306,18 +373,22 @@ impl<'a> Fader<'a> {
 
 impl<'a> Widget for Fader<'a> {
     fn ui(self, ui: &mut Ui) -> Response {
-        let desired_size = Vec2::new(48.0, self.height + 40.0);
+        let desired_size = Vec2::new(48.0, self.height + 50.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::drag());
+
+        let norm = (*self.value - self.min) / (self.max - self.min);
 
         if response.dragged() {
             let delta = response.drag_delta().y;
-            *self.value = (*self.value - delta / self.height).clamp(0.0, 1.0);
+            let range = self.max - self.min;
+            *self.value = (*self.value - delta / self.height * range).clamp(self.min, self.max);
         }
         if response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
-                let track_top = rect.min.y + 18.0;
+                let track_top = rect.min.y + 28.0;
                 let rel_y = pos.y - track_top;
-                *self.value = (1.0 - rel_y / self.height).clamp(0.0, 1.0);
+                let new_norm = (1.0 - rel_y / self.height).clamp(0.0, 1.0);
+                *self.value = self.min + new_norm * (self.max - self.min);
             }
         }
 
@@ -326,33 +397,29 @@ impl<'a> Widget for Fader<'a> {
             let center_x = rect.center().x;
 
             // Readout — 14 px monospace per spec
-            let readout = if self.unit == "Hz" && *self.value < 0.01 {
-                "OFF".to_string()
-            } else {
-                format!("{:.0}", *self.value * 100.0)
-            };
+            let readout = (self.format)(*self.value);
             painter.text(
                 Pos2::new(center_x, rect.min.y + 8.0),
                 egui::Align2::CENTER_CENTER,
                 &readout,
-                egui::FontId::monospace(14.0),
+                font_fader_readout(),
                 FG,
             );
             painter.text(
                 Pos2::new(center_x + 16.0, rect.min.y + 8.0),
                 egui::Align2::LEFT_CENTER,
                 self.unit,
-                egui::FontId::monospace(14.0),
+                font_fader_readout(),
                 FG_MUTED,
             );
 
             // Track
             let track_rect = Rect::from_center_size(
-                Pos2::new(center_x, rect.min.y + 18.0 + self.height / 2.0),
+                Pos2::new(center_x, rect.min.y + 28.0 + self.height / 2.0),
                 Vec2::new(28.0, self.height),
             );
             painter.rect_filled(track_rect, 3.0, BG_INPUT);
-            painter.rect_stroke(track_rect, 3.0, Stroke::new(1.0, BORDER), StrokeKind::Middle);
+            painter.rect_stroke(track_rect, 3.0, Stroke::new(1.0, BORDER), StrokeKind::Inside);
 
             // Tick marks
             for t in [0.0, 0.25, 0.5, 0.75, 1.0f32] {
@@ -367,7 +434,7 @@ impl<'a> Widget for Fader<'a> {
             }
 
             // Fill — two-stop vertical gradient via mesh (accent at top, FADER_GRADIENT_BOTTOM at bottom)
-            let fill_height = *self.value * self.height - 2.0;
+            let fill_height = norm * self.height - 2.0;
             if fill_height > 0.0 {
                 let fill_rect = Rect::from_min_max(
                     Pos2::new(track_rect.min.x + 1.0, track_rect.max.y - fill_height),
@@ -384,13 +451,13 @@ impl<'a> Widget for Fader<'a> {
             }
 
             // Cap
-            let cap_y = track_rect.max.y - *self.value * self.height;
+            let cap_y = track_rect.max.y - norm * self.height;
             let cap_rect = Rect::from_min_max(
                 Pos2::new(track_rect.min.x - 3.0, cap_y - 7.0),
                 Pos2::new(track_rect.max.x + 3.0, cap_y + 7.0),
             );
             painter.rect_filled(cap_rect, 2.0, CAP_BG_TOP);
-            painter.rect_stroke(cap_rect, 2.0, Stroke::new(1.0, BORDER_STRONG), StrokeKind::Middle);
+            painter.rect_stroke(cap_rect, 2.0, Stroke::new(1.0, BORDER_STRONG), StrokeKind::Inside);
             painter.line_segment(
                 [
                     Pos2::new(cap_rect.min.x + 2.0, cap_rect.center().y),
@@ -404,7 +471,7 @@ impl<'a> Widget for Fader<'a> {
                 Pos2::new(center_x, rect.max.y - 4.0),
                 egui::Align2::CENTER_BOTTOM,
                 self.label.to_uppercase(),
-                TextStyle::Body.resolve(ui.style()),
+                font_body(),
                 FG_SECONDARY,
             );
         }
@@ -413,7 +480,7 @@ impl<'a> Widget for Fader<'a> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Encoder
+// Encoder — Tier 2 #11
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub struct Encoder<'a> {
@@ -422,6 +489,7 @@ pub struct Encoder<'a> {
     pub unit: &'a str,
     pub min: f32,
     pub max: f32,
+    pub default_value: f32,
     pub decimals: usize,
     pub sub: Option<&'a str>,
     pub size: f32,
@@ -436,6 +504,7 @@ impl<'a> Encoder<'a> {
             unit: "",
             min: 0.0,
             max: 100.0,
+            default_value: 0.0,
             decimals: 0,
             sub: None,
             size: 76.0,
@@ -446,6 +515,11 @@ impl<'a> Encoder<'a> {
     pub fn range(mut self, min: f32, max: f32) -> Self {
         self.min = min;
         self.max = max;
+        self
+    }
+
+    pub fn default_value(mut self, v: f32) -> Self {
+        self.default_value = v;
         self
     }
 
@@ -475,12 +549,18 @@ impl<'a> Widget for Encoder<'a> {
         let desired_size = Vec2::new(self.size, self.size + 24.0);
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::drag());
         if response.dragged() {
-            let delta = response.drag_delta().x;
+            let delta = -response.drag_delta().y; // Y-axis, up = increase
             let range = self.max - self.min;
-            *self.value = (*self.value + delta * range * 0.01).clamp(self.min, self.max);
+            let mut sens = 0.002 * range; // default ~0.2% of range per pixel
+            if ui.input(|i| i.modifiers.shift) {
+                sens *= 0.1;
+            } else if ui.input(|i| i.modifiers.command || i.modifiers.ctrl) {
+                sens *= 5.0;
+            }
+            *self.value = (*self.value + delta * sens).clamp(self.min, self.max);
         }
         if response.double_clicked() {
-            *self.value = (self.min + self.max) * 0.5;
+            *self.value = self.default_value;
         }
 
         if ui.is_rect_visible(rect) {
@@ -523,7 +603,7 @@ impl<'a> Widget for Encoder<'a> {
                 Pos2::new(cx, cy - if self.sub.is_some() { 4.0 } else { 0.0 }),
                 egui::Align2::CENTER_CENTER,
                 value_text,
-                egui::FontId::monospace(18.0),
+                font_encoder_readout(),
                 FG,
             );
             if let Some(sub) = self.sub {
@@ -531,7 +611,7 @@ impl<'a> Widget for Encoder<'a> {
                     Pos2::new(cx, cy + 10.0),
                     egui::Align2::CENTER_CENTER,
                     sub,
-                    egui::FontId::monospace(10.0),
+                    font_status(),
                     FG_MUTED,
                 );
             }
@@ -541,7 +621,7 @@ impl<'a> Widget for Encoder<'a> {
                 Pos2::new(cx, rect.max.y - 4.0),
                 egui::Align2::CENTER_BOTTOM,
                 self.label.to_uppercase(),
-                TextStyle::Body.resolve(ui.style()),
+                font_body(),
                 FG_SECONDARY,
             );
         }
@@ -551,12 +631,11 @@ impl<'a> Widget for Encoder<'a> {
 
 fn arc_points(cx: f32, cy: f32, r: f32, start_deg: f32, end_deg: f32) -> Vec<Pos2> {
     let steps = 64;
-    let start = start_deg.min(end_deg);
-    let end = start_deg.max(end_deg);
+    // Tier 3 #22: don't swap — respect caller's direction
     (0..=steps)
         .map(|i| {
             let t = i as f32 / steps as f32;
-            let deg = start + t * (end - start);
+            let deg = start_deg + t * (end_deg - start_deg);
             let rad = (deg - 90.0).to_radians();
             Pos2::new(cx + r * rad.cos(), cy + r * rad.sin())
         })
@@ -575,7 +654,7 @@ pub fn dropzone(ui: &mut Ui, label: &str, hint: &str) -> bool {
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect_filled(rect, 3.0, Color32::from_rgba_premultiplied(10, 11, 13, 153));
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_STRONG), StrokeKind::Middle);
+        painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_STRONG), StrokeKind::Inside);
 
         // Icon tile
         let tile_rect = Rect::from_center_size(
@@ -583,21 +662,21 @@ pub fn dropzone(ui: &mut Ui, label: &str, hint: &str) -> bool {
             Vec2::splat(28.0),
         );
         painter.rect_filled(tile_rect, 3.0, BG_RAISED);
-        painter.rect_stroke(tile_rect, 3.0, Stroke::new(1.0, BORDER), StrokeKind::Middle);
+        painter.rect_stroke(tile_rect, 3.0, Stroke::new(1.0, BORDER), StrokeKind::Inside);
 
         // Label + hint
         painter.text(
             Pos2::new(rect.min.x + 48.0, rect.center().y - 6.0),
             egui::Align2::LEFT_CENTER,
             label,
-            TextStyle::Body.resolve(ui.style()),
+            font_body(),
             FG,
         );
         painter.text(
             Pos2::new(rect.min.x + 48.0, rect.center().y + 8.0),
             egui::Align2::LEFT_CENTER,
             hint,
-            TextStyle::Body.resolve(ui.style()),
+            font_hint(),
             FG_MUTED,
         );
     }
@@ -637,10 +716,14 @@ pub fn tab_button(ui: &mut Ui, label: &str, active: bool, badge: Option<usize>) 
     ui.add(button)
 }
 
+/// Tier 2 #15: library tab with explicit FontId, no dead RichText
 pub fn library_tab(ui: &mut Ui, label: &str, active: bool, badge: Option<usize>) -> Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), TextStyle::Body.resolve(ui.style()), if active { FG } else { FG_SECONDARY });
-    let width = galley.size().x + 24.0;
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font_body(), if active { FG } else { FG_SECONDARY });
+    let width = galley.size().x + 32.0;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::click());
+    if response.clicked() {
+        // caller handles tab switch
+    }
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if active {
@@ -653,19 +736,21 @@ pub fn library_tab(ui: &mut Ui, label: &str, active: bool, badge: Option<usize>)
             rect.center(),
             egui::Align2::CENTER_CENTER,
             label,
-            TextStyle::Body.resolve(ui.style()),
+            font_body(),
             if active { FG } else { FG_SECONDARY },
         );
         if let Some(b) = badge {
-            let badge_text = format!("{}", b);
-            let badge_pos = Pos2::new(rect.center().x + galley.size().x * 0.5 + 8.0, rect.center().y);
-            painter.text(
-                badge_pos,
-                egui::Align2::LEFT_CENTER,
-                &badge_text,
-                TextStyle::Body.resolve(ui.style()),
-                if active { ACCENT } else { FG_MUTED },
-            );
+            if b > 0 {
+                let badge_text = format!("{}", b);
+                let badge_pos = Pos2::new(rect.center().x + galley.size().x * 0.5 + 8.0, rect.center().y);
+                painter.text(
+                    badge_pos,
+                    egui::Align2::LEFT_CENTER,
+                    &badge_text,
+                    font_body(),
+                    if active { ACCENT } else { FG_MUTED },
+                );
+            }
         }
     }
     response
@@ -739,7 +824,12 @@ pub fn panel_titlebar(
             }
         });
     });
-    ui.separator();
+    // Tier 1 #7 + Tier 3 #19: hairline instead of ui.separator()
+    let p = ui.available_rect_before_wrap();
+    ui.painter().line_segment(
+        [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+        Stroke::new(1.0, BORDER),
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -118,6 +118,17 @@ pub struct VenueLoadState {
     pub import_error: Option<String>,
 }
 
+// ─── ProtocolStatus ───────────────────────────────────────────────────────────
+
+#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum ProtocolStatus {
+    #[default]
+    Idle,
+    Live,
+    Warn,
+    Error,
+}
+
 // ─── IoConfig ─────────────────────────────────────────────────────────────────
 
 /// I/O configuration shared between the UI panels and the IO crate.
@@ -136,7 +147,7 @@ pub struct IoConfig {
     pub artnet_allowed_sources: String,
     pub artnet_tx_count: u64,
     pub artnet_rx_count: u64,
-    pub artnet_status: String,
+    pub artnet_status: ProtocolStatus,
 
     // ── sACN (E1.31) ─────────────────────────────────────────────────────────
     /// Enable sACN output.
@@ -151,7 +162,7 @@ pub struct IoConfig {
     pub sacn_dest_ip: String,
     pub sacn_tx_count: u64,
     pub sacn_rx_count: u64,
-    pub sacn_status: String,
+    pub sacn_status: ProtocolStatus,
 
     // ── USB DMX (Enttec USB Pro) ──────────────────────────────────────────────
     /// Enable USB DMX output.
@@ -161,13 +172,13 @@ pub struct IoConfig {
     /// Universe to send on the USB device.
     pub usb_universe: u16,
     pub usb_tx_count: u64,
-    pub usb_status: String,
+    pub usb_status: ProtocolStatus,
 
     // ── MIDI input ────────────────────────────────────────────────────────────
     pub midi_enabled: bool,
     /// MIDI port name (exact string from midir port listing).
     pub midi_port: String,
-    pub midi_status: String,
+    pub midi_status: ProtocolStatus,
     pub midi_rx_count: u64,
     /// MIDI CC numbers mapped to programmer attributes.
     pub midi_cc_dimmer: u8,
@@ -183,7 +194,7 @@ pub struct IoConfig {
     pub osc_enabled: bool,
     /// UDP port for OSC listener (default 8000).
     pub osc_port: u16,
-    pub osc_status: String,
+    pub osc_status: ProtocolStatus,
     pub osc_rx_count: u64,
 }
 
@@ -197,7 +208,7 @@ impl Default for IoConfig {
             artnet_allowed_sources: String::new(),
             artnet_tx_count: 0,
             artnet_rx_count: 0,
-            artnet_status: "Idle".into(),
+            artnet_status: ProtocolStatus::Idle,
 
             sacn_tx_enabled: false,
             sacn_rx_enabled: false,
@@ -206,17 +217,17 @@ impl Default for IoConfig {
             sacn_dest_ip: String::new(),
             sacn_tx_count: 0,
             sacn_rx_count: 0,
-            sacn_status: "Idle".into(),
+            sacn_status: ProtocolStatus::Idle,
 
             usb_tx_enabled: false,
             usb_port: String::new(),
             usb_universe: 1,
             usb_tx_count: 0,
-            usb_status: "Idle".into(),
+            usb_status: ProtocolStatus::Idle,
 
             midi_enabled: false,
             midi_port: String::new(),
-            midi_status: "Idle".into(),
+            midi_status: ProtocolStatus::Idle,
             midi_rx_count: 0,
             midi_cc_dimmer: 7,
             midi_cc_pan: 10,
@@ -229,7 +240,7 @@ impl Default for IoConfig {
 
             osc_enabled: false,
             osc_port: 8000,
-            osc_status: "Idle".into(),
+            osc_status: ProtocolStatus::Idle,
             osc_rx_count: 0,
         }
     }

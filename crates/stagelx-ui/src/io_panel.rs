@@ -4,9 +4,7 @@ use bevy_egui::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Stroke
 use crate::theme::*;
 use crate::widgets;
 use crate::{ActiveProtocol, IoConfig, IoPanelState};
-
-// Legacy entry point
-pub fn io_panel(mut _ctx: bevy_egui::EguiContexts, mut _cfg: ResMut<IoConfig>) {}
+use stagelx_state::ProtocolStatus;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DMX I/O Panel (docked / inline)
@@ -17,67 +15,56 @@ pub fn io_panel_docked(
     cfg: &mut IoConfig,
     state: &mut IoPanelState,
 ) {
-    let available_width = ui.available_width();
-    ui.set_min_width(available_width);
-
     // ── Protocol strip ────────────────────────────────────────────────────────
-    {
-        let strip_height = 48.0;
-        let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, strip_height), Sense::hover());
-        if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
-            painter.rect_filled(rect, 3.0, BG_INPUT);
-            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
-        }
-
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
-            ui.horizontal(|ui| {
-                let protocols = [
-                    ("Art-Net", ActiveProtocol::ArtNet),
-                    ("sACN", ActiveProtocol::Sacn),
-                    ("USB", ActiveProtocol::Usb),
-                    ("MIDI", ActiveProtocol::Midi),
-                    ("OSC", ActiveProtocol::Osc),
-                ];
-                let cell_width = available_width / 5.0 - 4.0;
-                for (label, proto) in protocols {
-                    let active = state.active_protocol == proto;
-                    let (cell_rect, response) = ui.allocate_exact_size(Vec2::new(cell_width, 40.0), Sense::click());
-                    if response.clicked() {
-                        state.active_protocol = proto;
-                    }
-                    if ui.is_rect_visible(cell_rect) {
-                        let painter = ui.painter();
-                        painter.rect_filled(cell_rect, 2.0, if active { BG_RAISED } else { Color32::TRANSPARENT });
-                        painter.rect_stroke(cell_rect, 2.0, Stroke::new(1.0, if active { ACCENT_DIM } else { Color32::TRANSPARENT }), StrokeKind::Middle);
-
-                        let status = match proto {
-                            ActiveProtocol::ArtNet => status_to_dot(&cfg.artnet_status),
-                            ActiveProtocol::Sacn   => status_to_dot(&cfg.sacn_status),
-                            ActiveProtocol::Usb    => status_to_dot(&cfg.usb_status),
-                            ActiveProtocol::Midi   => status_to_dot(&cfg.midi_status),
-                            ActiveProtocol::Osc    => status_to_dot(&cfg.osc_status),
-                        };
-                        let dot_y = cell_rect.min.y + 10.0;
-                        painter.circle_filled(Pos2::new(cell_rect.center().x, dot_y), 3.0, status.color());
-                        if let Some(glow) = status.glow() {
-                            painter.circle_filled(Pos2::new(cell_rect.center().x, dot_y), 6.0, glow);
-                        }
-
-                        painter.text(
-                            Pos2::new(cell_rect.center().x, cell_rect.max.y - 8.0),
-                            egui::Align2::CENTER_CENTER,
-                            label,
-                            egui::TextStyle::Body.resolve(ui.style()),
-                            if active { FG } else { FG_SECONDARY },
-                        );
-                    }
-                    ui.add_space(4.0);
+    widgets::card(ui, |ui| {
+        let available_width = ui.available_width();
+        ui.horizontal(|ui| {
+            let protocols = [
+                ("Art-Net", ActiveProtocol::ArtNet),
+                ("sACN", ActiveProtocol::Sacn),
+                ("USB", ActiveProtocol::Usb),
+                ("MIDI", ActiveProtocol::Midi),
+                ("OSC", ActiveProtocol::Osc),
+            ];
+            let n = protocols.len();
+            let spacing = 4.0;
+            let cell_width = (available_width - spacing * (n - 1) as f32) / n as f32;
+            for (i, &(label, proto)) in protocols.iter().enumerate() {
+                let active = state.active_protocol == proto;
+                let (cell_rect, response) = ui.allocate_exact_size(Vec2::new(cell_width, 40.0), Sense::click());
+                if response.clicked() {
+                    state.active_protocol = proto;
                 }
-            });
+                if ui.is_rect_visible(cell_rect) {
+                    let painter = ui.painter();
+                    painter.rect_filled(cell_rect, 2.0, if active { BG_RAISED } else { Color32::TRANSPARENT });
+                    painter.rect_stroke(cell_rect, 2.0, Stroke::new(1.0, if active { ACCENT_DIM } else { Color32::TRANSPARENT }), StrokeKind::Inside);
+
+                    let status = match proto {
+                        ActiveProtocol::ArtNet => cfg.artnet_status,
+                        ActiveProtocol::Sacn   => cfg.sacn_status,
+                        ActiveProtocol::Usb    => cfg.usb_status,
+                        ActiveProtocol::Midi   => cfg.midi_status,
+                        ActiveProtocol::Osc    => cfg.osc_status,
+                    };
+                    let dot_y = cell_rect.min.y + 10.0;
+                    painter.circle_filled(Pos2::new(cell_rect.center().x, dot_y), 3.0, status_to_dot(status).color());
+                    if let Some(glow) = status_to_dot(status).glow() {
+                        painter.circle_filled(Pos2::new(cell_rect.center().x, dot_y), 6.0, glow);
+                    }
+
+                    painter.text(
+                        Pos2::new(cell_rect.center().x, cell_rect.max.y - 8.0),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        font_body(),
+                        if active { FG } else { FG_SECONDARY },
+                    );
+                }
+                if i + 1 < n { ui.add_space(spacing); }
+            }
         });
-    }
-    ui.add_space(10.0);
+    });
 
     // ── Active protocol config ────────────────────────────────────────────────
     match state.active_protocol {
@@ -97,55 +84,43 @@ pub fn io_panel_docked(
         ActiveProtocol::Osc    => (0,                   cfg.osc_rx_count),
     };
 
-    ui.add_space(12.0);
-    {
-        let card_height = 72.0;
-        let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, card_height), Sense::hover());
-        if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
-            painter.rect_filled(rect, 3.0, BG_CHROME);
-            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
-        }
-
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let col_width = ((available_width - 16.0) / 2.0).max(0.0);
-                // TX
-                ui.allocate_ui_with_layout(Vec2::new(col_width, 56.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    ui.horizontal(|ui| {
-                        widgets::status_dot(ui, widgets::DotState::Tx);
-                        ui.label(RichText::new("TX").size(9.0).strong().color(FG_MUTED).monospace());
-                    });
-                    ui.label(RichText::new(format!("{}", tx_count)).size(16.0).monospace().color(FG));
-                    ui.label(RichText::new("packets/s").size(9.0).monospace().color(FG_FAINT));
+    widgets::card(ui, |ui| {
+        let available_width = ui.available_width();
+        ui.horizontal(|ui| {
+            let col_width = ((available_width - 16.0) / 2.0).max(0.0);
+            // TX
+            ui.allocate_ui_with_layout(Vec2::new(col_width, 56.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.horizontal(|ui| {
+                    widgets::status_dot(ui, widgets::DotState::Tx);
+                    ui.label(RichText::new("TX").size(9.0).strong().color(FG_MUTED).monospace());
                 });
+                ui.label(RichText::new(format!("{}", tx_count)).size(16.0).monospace().color(FG));
+                ui.label(RichText::new("packets/s").size(9.0).monospace().color(FG_FAINT));
+            });
 
-                // RX
-                ui.allocate_ui_with_layout(Vec2::new(col_width, 56.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                    ui.horizontal(|ui| {
-                        widgets::status_dot(ui, widgets::DotState::Live);
-                        ui.label(RichText::new("RX").size(9.0).strong().color(FG_MUTED).monospace());
-                    });
-                    ui.label(RichText::new(format!("{}", rx_count)).size(16.0).monospace().color(FG));
-                    ui.label(RichText::new("packets/s").size(9.0).monospace().color(FG_FAINT));
+            // RX
+            ui.allocate_ui_with_layout(Vec2::new(col_width, 56.0), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.horizontal(|ui| {
+                    widgets::status_dot(ui, widgets::DotState::Live);
+                    ui.label(RichText::new("RX").size(9.0).strong().color(FG_MUTED).monospace());
                 });
+                ui.label(RichText::new(format!("{}", rx_count)).size(16.0).monospace().color(FG));
+                ui.label(RichText::new("packets/s").size(9.0).monospace().color(FG_FAINT));
             });
         });
-    }
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Per-protocol configs
 // ═══════════════════════════════════════════════════════════════════════════════
 
-fn status_to_dot(s: &str) -> widgets::DotState {
-    if s.contains("bound") || s.contains("TX") || s.contains("listening") {
-        widgets::DotState::Live
-    } else if s.contains("busy") || s.contains("error") || s.contains("warn") {
-        widgets::DotState::Warn
-    } else {
-        widgets::DotState::Idle
+fn status_to_dot(s: ProtocolStatus) -> widgets::DotState {
+    match s {
+        ProtocolStatus::Live => widgets::DotState::Live,
+        ProtocolStatus::Warn => widgets::DotState::Warn,
+        ProtocolStatus::Error => widgets::DotState::Error,
+        ProtocolStatus::Idle => widgets::DotState::Idle,
     }
 }
 
@@ -158,7 +133,6 @@ fn config_row(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui)) {
         ui.add_space(8.0);
         content(ui);
     });
-    ui.add_space(6.0);
 }
 
 fn artnet_config(ui: &mut Ui, cfg: &mut IoConfig) {
@@ -238,16 +212,15 @@ fn midi_config(ui: &mut Ui, cfg: &mut IoConfig) {
         ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.midi_port).hint_text("select MIDI input…").text_color(FG));
     });
 
-    ui.add_space(10.0);
     ui.horizontal(|ui| {
         widgets::eyebrow_widget(ui, "CC Mapping");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(6.0);
             if ui.add_sized([60.0, 20.0], egui::Button::new(RichText::new("Learn").color(FG_SECONDARY)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
                 // TODO: MIDI learn
             }
         });
     });
-    ui.add_space(6.0);
 
     let mut ccs = [
         ("Dimmer", &mut cfg.midi_cc_dimmer),
@@ -268,12 +241,12 @@ fn midi_config(ui: &mut Ui, cfg: &mut IoConfig) {
             if col.is_rect_visible(rect) {
                 let painter = col.painter();
                 painter.rect_filled(rect, 2.0, BG_INPUT);
-                painter.rect_stroke(rect, 2.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
+                painter.rect_stroke(rect, 2.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Inside);
                 painter.text(
                     Pos2::new(rect.min.x + 6.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
                     *label,
-                    egui::FontId::monospace(10.0),
+                    font_status(),
                     FG_SECONDARY,
                 );
             }
@@ -301,22 +274,9 @@ fn osc_config(ui: &mut Ui, cfg: &mut IoConfig) {
         ui.add(egui::DragValue::new(&mut cfg.osc_port).range(1024_u16..=65535_u16));
     });
 
-    ui.add_space(8.0);
-    {
-        let card_height = 60.0;
-        let available_width = ui.available_width();
-        let (rect, _response) = ui.allocate_exact_size(Vec2::new(available_width, card_height), Sense::hover());
-        if ui.is_rect_visible(rect) {
-            let painter = ui.painter();
-            painter.rect_filled(rect, 3.0, BG_INPUT);
-            painter.rect_stroke(rect, 3.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Middle);
-        }
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
-            ui.add_space(8.0);
-            widgets::eyebrow_widget(ui, "Address Pattern");
-            ui.add_space(4.0);
-            ui.label(RichText::new("/fixture/{id}/{attr}").size(11.0).monospace().color(ACCENT));
-            ui.label(RichText::new("f32 · 0.0–1.0 normalised").size(9.0).monospace().color(FG_MUTED));
-        });
-    }
+    widgets::card(ui, |ui| {
+        widgets::eyebrow_widget(ui, "Address Pattern");
+        ui.label(RichText::new("/fixture/{id}/{attr}").size(11.0).monospace().color(ACCENT));
+        ui.label(RichText::new("f32 · 0.0–1.0 normalised").size(9.0).monospace().color(FG_MUTED));
+    });
 }
