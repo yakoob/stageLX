@@ -3,7 +3,9 @@ use bevy_egui::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Stroke
 
 use crate::theme::*;
 use crate::widgets;
-use crate::{ActiveProtocol, IoConfig, IoPanelState};
+use crate::{ActiveProtocol, IoPanelState};
+use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
+use stagelx_io::stats::{ArtNetStats, MidiStats, OscStats, SacnStats, UsbStats};
 use stagelx_state::ProtocolStatus;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -12,7 +14,16 @@ use stagelx_state::ProtocolStatus;
 
 pub fn io_panel_docked(
     ui: &mut Ui,
-    cfg: &mut IoConfig,
+    artnet_cfg: &mut ArtNetConfig,
+    artnet_stats: &ArtNetStats,
+    sacn_cfg: &mut SacnConfig,
+    sacn_stats: &SacnStats,
+    usb_cfg: &mut UsbConfig,
+    usb_stats: &UsbStats,
+    midi_cfg: &mut MidiConfig,
+    midi_stats: &MidiStats,
+    osc_cfg: &mut OscConfig,
+    osc_stats: &OscStats,
     state: &mut IoPanelState,
 ) {
     // ── Protocol strip ────────────────────────────────────────────────────────
@@ -41,11 +52,11 @@ pub fn io_panel_docked(
                     painter.rect_stroke(cell_rect, 2.0, Stroke::new(1.0, if active { ACCENT_DIM } else { Color32::TRANSPARENT }), StrokeKind::Inside);
 
                     let status = match proto {
-                        ActiveProtocol::ArtNet => cfg.artnet_status,
-                        ActiveProtocol::Sacn   => cfg.sacn_status,
-                        ActiveProtocol::Usb    => cfg.usb_status,
-                        ActiveProtocol::Midi   => cfg.midi_status,
-                        ActiveProtocol::Osc    => cfg.osc_status,
+                        ActiveProtocol::ArtNet => artnet_stats.status,
+                        ActiveProtocol::Sacn   => sacn_stats.status,
+                        ActiveProtocol::Usb    => usb_stats.status,
+                        ActiveProtocol::Midi   => midi_stats.status,
+                        ActiveProtocol::Osc    => osc_stats.status,
                     };
                     let dot_y = cell_rect.min.y + 10.0;
                     painter.circle_filled(Pos2::new(cell_rect.center().x, dot_y), 3.0, status_to_dot(status).color());
@@ -68,20 +79,20 @@ pub fn io_panel_docked(
 
     // ── Active protocol config ────────────────────────────────────────────────
     match state.active_protocol {
-        ActiveProtocol::ArtNet => artnet_config(ui, cfg),
-        ActiveProtocol::Sacn => sacn_config(ui, cfg),
-        ActiveProtocol::Usb => usb_config(ui, cfg),
-        ActiveProtocol::Midi => midi_config(ui, cfg),
-        ActiveProtocol::Osc => osc_config(ui, cfg),
+        ActiveProtocol::ArtNet => artnet_config(ui, artnet_cfg),
+        ActiveProtocol::Sacn => sacn_config(ui, sacn_cfg),
+        ActiveProtocol::Usb => usb_config(ui, usb_cfg, usb_stats),
+        ActiveProtocol::Midi => midi_config(ui, midi_cfg),
+        ActiveProtocol::Osc => osc_config(ui, osc_cfg),
     }
 
     // ── TX/RX counters ────────────────────────────────────────────────────────
     let (tx_count, rx_count) = match state.active_protocol {
-        ActiveProtocol::ArtNet => (cfg.artnet_tx_count, cfg.artnet_rx_count),
-        ActiveProtocol::Sacn   => (cfg.sacn_tx_count,   cfg.sacn_rx_count),
-        ActiveProtocol::Usb    => (cfg.usb_tx_count,    0),
-        ActiveProtocol::Midi   => (0,                   cfg.midi_rx_count),
-        ActiveProtocol::Osc    => (0,                   cfg.osc_rx_count),
+        ActiveProtocol::ArtNet => (artnet_stats.tx_count, artnet_stats.rx_count),
+        ActiveProtocol::Sacn   => (sacn_stats.tx_count,   sacn_stats.rx_count),
+        ActiveProtocol::Usb    => (usb_stats.tx_count,    0),
+        ActiveProtocol::Midi   => (0,                     midi_stats.rx_count),
+        ActiveProtocol::Osc    => (0,                     osc_stats.rx_count),
     };
 
     widgets::card(ui, |ui| {
@@ -135,81 +146,83 @@ fn config_row(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui)) {
     });
 }
 
-fn artnet_config(ui: &mut Ui, cfg: &mut IoConfig) {
+fn artnet_config(ui: &mut Ui, cfg: &mut ArtNetConfig) {
     config_row(ui, "Bind", |ui| {
-        ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.artnet_ip).hint_text("0.0.0.0").text_color(FG));
+        ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.ip).hint_text("0.0.0.0").text_color(FG));
     });
     config_row(ui, "Dest", |ui| {
-        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.artnet_dest_ip).hint_text("255.255.255.255").text_color(FG));
+        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.dest_ip).hint_text("255.255.255.255").text_color(FG));
     });
     config_row(ui, "Universe", |ui| {
-        ui.add(egui::DragValue::new(&mut cfg.artnet_out_universe).range(0_u16..=32767_u16));
+        ui.add(egui::DragValue::new(&mut cfg.out_universe).range(0_u16..=32767_u16));
         ui.label(RichText::new("0–32767").size(10.0).monospace().color(FG_FAINT));
     });
     config_row(ui, "Receive", |ui| {
         ui.horizontal(|ui| {
-            let mut rx = cfg.artnet_rx_enabled;
+            let mut rx = cfg.rx_enabled;
             widgets::toggle(ui, &mut rx, "RX");
-            cfg.artnet_rx_enabled = rx;
-            ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.artnet_allowed_sources).hint_text("any").text_color(FG));
+            cfg.rx_enabled = rx;
+            ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.allowed_sources).hint_text("any").text_color(FG));
         });
     });
 
     // Live banner
-    widgets::banner(ui, widgets::DotState::Live, &format!("bound {}:6454 · 2 nodes seen", cfg.artnet_ip));
+    widgets::banner(ui, widgets::DotState::Live, &format!("bound {}:6454 · 2 nodes seen", cfg.ip));
 }
 
-fn sacn_config(ui: &mut Ui, cfg: &mut IoConfig) {
+fn sacn_config(ui: &mut Ui, cfg: &mut SacnConfig) {
     config_row(ui, "Mode", |ui| {
-        let mut tx = cfg.sacn_tx_enabled;
-        let mut rx = cfg.sacn_rx_enabled;
+        let mut tx = cfg.tx_enabled;
+        let mut rx = cfg.rx_enabled;
         widgets::toggle(ui, &mut tx, "TX");
-        cfg.sacn_tx_enabled = tx;
+        cfg.tx_enabled = tx;
         ui.add_space(4.0);
         widgets::toggle(ui, &mut rx, "RX");
-        cfg.sacn_rx_enabled = rx;
+        cfg.rx_enabled = rx;
     });
     config_row(ui, "Universe", |ui| {
-        ui.add(egui::DragValue::new(&mut cfg.sacn_out_universe).range(1_u16..=63999_u16));
+        ui.add(egui::DragValue::new(&mut cfg.out_universe).range(1_u16..=63999_u16));
         ui.label(RichText::new("1–63999").size(10.0).monospace().color(FG_FAINT));
     });
     config_row(ui, "Priority", |ui| {
-        ui.add(egui::DragValue::new(&mut cfg.sacn_priority).range(1_u8..=200_u8));
+        ui.add(egui::DragValue::new(&mut cfg.priority).range(1_u8..=200_u8));
     });
     config_row(ui, "Dest", |ui| {
-        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.sacn_dest_ip).hint_text("239.255.X.X").text_color(FG));
+        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.dest_ip).hint_text("239.255.X.X").text_color(FG));
         ui.label(RichText::new("multicast").size(10.0).monospace().color(FG_FAINT));
     });
 }
 
-fn usb_config(ui: &mut Ui, cfg: &mut IoConfig) {
+fn usb_config(ui: &mut Ui, cfg: &mut UsbConfig, stats: &UsbStats) {
     config_row(ui, "State", |ui| {
-        let mut en = cfg.usb_tx_enabled;
+        let mut en = cfg.tx_enabled;
         widgets::toggle(ui, &mut en, "TX ENABLED");
-        cfg.usb_tx_enabled = en;
+        cfg.tx_enabled = en;
     });
     config_row(ui, "Port", |ui| {
-        ui.add_sized([130.0, 24.0], egui::TextEdit::singleline(&mut cfg.usb_port).hint_text("/dev/tty.usbserial-…").text_color(FG));
+        ui.add_sized([130.0, 24.0], egui::TextEdit::singleline(&mut cfg.port).hint_text("/dev/tty.usbserial-…").text_color(FG));
         if ui.add_sized([24.0, 24.0], egui::Button::new("▾").fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).on_hover_text("Enumerate serial ports").clicked() {
             // TODO: populate usb_port from serialport::available_ports() via IoSupervisor
         }
     });
     config_row(ui, "Universe", |ui| {
-        ui.add(egui::DragValue::new(&mut cfg.usb_universe).range(1_u16..=32767_u16));
+        ui.add(egui::DragValue::new(&mut cfg.universe).range(1_u16..=32767_u16));
     });
 
-    // Warning banner (placeholder)
-    widgets::banner(ui, widgets::DotState::Warn, "port busy — close other apps using this device");
+    // Warning banner if error
+    if stats.status == ProtocolStatus::Error {
+        widgets::banner(ui, widgets::DotState::Warn, "port busy — close other apps using this device");
+    }
 }
 
-fn midi_config(ui: &mut Ui, cfg: &mut IoConfig) {
+fn midi_config(ui: &mut Ui, cfg: &mut MidiConfig) {
     config_row(ui, "State", |ui| {
-        let mut en = cfg.midi_enabled;
+        let mut en = cfg.enabled;
         widgets::toggle(ui, &mut en, "ENABLE");
-        cfg.midi_enabled = en;
+        cfg.enabled = en;
     });
     config_row(ui, "Port", |ui| {
-        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.midi_port).hint_text("select MIDI input…").text_color(FG));
+        ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.port).hint_text("select MIDI input…").text_color(FG));
     });
 
     ui.horizontal(|ui| {
@@ -223,14 +236,14 @@ fn midi_config(ui: &mut Ui, cfg: &mut IoConfig) {
     });
 
     let mut ccs = [
-        ("Dimmer", &mut cfg.midi_cc_dimmer),
-        ("Pan", &mut cfg.midi_cc_pan),
-        ("Tilt", &mut cfg.midi_cc_tilt),
-        ("Zoom", &mut cfg.midi_cc_zoom),
-        ("Red", &mut cfg.midi_cc_red),
-        ("Green", &mut cfg.midi_cc_green),
-        ("Blue", &mut cfg.midi_cc_blue),
-        ("Strobe", &mut cfg.midi_cc_strobe),
+        ("Dimmer", &mut cfg.cc_dimmer),
+        ("Pan", &mut cfg.cc_pan),
+        ("Tilt", &mut cfg.cc_tilt),
+        ("Zoom", &mut cfg.cc_zoom),
+        ("Red", &mut cfg.cc_red),
+        ("Green", &mut cfg.cc_green),
+        ("Blue", &mut cfg.cc_blue),
+        ("Strobe", &mut cfg.cc_strobe),
     ];
 
     ui.columns(2, |cols| {
@@ -264,14 +277,14 @@ fn midi_config(ui: &mut Ui, cfg: &mut IoConfig) {
     });
 }
 
-fn osc_config(ui: &mut Ui, cfg: &mut IoConfig) {
+fn osc_config(ui: &mut Ui, cfg: &mut OscConfig) {
     config_row(ui, "State", |ui| {
-        let mut en = cfg.osc_enabled;
+        let mut en = cfg.enabled;
         widgets::toggle(ui, &mut en, "LISTENING");
-        cfg.osc_enabled = en;
+        cfg.enabled = en;
     });
     config_row(ui, "Port", |ui| {
-        ui.add(egui::DragValue::new(&mut cfg.osc_port).range(1024_u16..=65535_u16));
+        ui.add(egui::DragValue::new(&mut cfg.port).range(1024_u16..=65535_u16));
     });
 
     widgets::card(ui, |ui| {

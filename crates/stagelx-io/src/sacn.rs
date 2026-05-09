@@ -17,7 +17,9 @@ use std::{
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::{IoConfig, ProtocolStatus};
+use stagelx_state::ProtocolStatus;
+use crate::config::SacnConfig;
+use crate::stats::SacnStats;
 
 use crate::supervisor::IoSupervisor;
 
@@ -164,10 +166,10 @@ impl Default for SacnState {
 /// Manage sACN socket lifetime (port 5568, separate from Art-Net).
 pub fn sacn_manage_socket(
     mut state: ResMut<SacnState>,
-    cfg: Res<IoConfig>,
+    cfg: Res<SacnConfig>,
     supervisor: Res<IoSupervisor>,
 ) {
-    let wants_io = cfg.sacn_tx_enabled || cfg.sacn_rx_enabled;
+    let wants_io = cfg.tx_enabled || cfg.rx_enabled;
 
     if wants_io && state.socket.is_none() {
         let now = std::time::Instant::now();
@@ -189,7 +191,7 @@ pub fn sacn_manage_socket(
         }
     }
 
-    if cfg.sacn_rx_enabled && state.rx_chan.is_none() {
+    if cfg.rx_enabled && state.rx_chan.is_none() {
         if let Some(ref sock) = state.socket {
             match sock.try_clone() {
                 Ok(rx_sock) => {
@@ -235,7 +237,7 @@ pub fn sacn_manage_socket(
         }
     }
 
-    if !cfg.sacn_rx_enabled {
+    if !cfg.rx_enabled {
         state.rx_chan = None;
         state.rx_thread_tx = None;
     }
@@ -257,7 +259,7 @@ pub fn sacn_manage_socket(
 pub fn sacn_receive(
     state: Res<SacnState>,
     mut engine: ResMut<DmxEngineRes>,
-    mut cfg: ResMut<IoConfig>,
+    mut stats: ResMut<SacnStats>,
 ) {
     let Some(rx) = &state.rx_chan else { return };
 
@@ -284,7 +286,7 @@ pub fn sacn_receive(
         buf.copy_from_slice(&pkt.data);
         count += 1;
     }
-    cfg.sacn_rx_count = cfg.sacn_rx_count.saturating_add(count);
+    stats.rx_count = stats.rx_count.saturating_add(count);
 }
 
 /// Send sACN output for the configured universe.
@@ -292,9 +294,10 @@ pub fn sacn_receive(
 pub fn sacn_send(
     mut state: ResMut<SacnState>,
     engine: Res<DmxEngineRes>,
-    mut cfg: ResMut<IoConfig>,
+    cfg: Res<SacnConfig>,
+    mut stats: ResMut<SacnStats>,
 ) {
-    if !cfg.sacn_tx_enabled {
+    if !cfg.tx_enabled {
         return;
     }
 
@@ -302,18 +305,18 @@ pub fn sacn_send(
         return;
     }
 
-    let universe = cfg.sacn_out_universe;
+    let universe = cfg.out_universe;
     if let Some(dmx_buf) = engine.0.output_buffer(universe) {
         // Capture and advance sequence before borrowing socket.
         let seq = state.sequence;
         state.sequence = state.sequence.wrapping_add(1);
 
-        let pkt = build_sacn(universe, cfg.sacn_priority, seq, dmx_buf.as_bytes());
+        let pkt = build_sacn(universe, cfg.priority, seq, dmx_buf.as_bytes());
 
-        let dest_ip: IpAddr = if cfg.sacn_dest_ip.trim().is_empty() {
+        let dest_ip: IpAddr = if cfg.dest_ip.trim().is_empty() {
             IpAddr::V4(multicast_addr(universe))
         } else {
-            cfg.sacn_dest_ip
+            cfg.dest_ip
                 .trim()
                 .parse()
                 .unwrap_or_else(|_| IpAddr::V4(multicast_addr(universe)))
@@ -323,12 +326,12 @@ pub fn sacn_send(
         let sock = state.socket.as_ref().unwrap();
         match sock.send_to(&pkt, dest) {
             Ok(_) => {
-                cfg.sacn_tx_count = cfg.sacn_tx_count.saturating_add(1);
-                cfg.sacn_status = ProtocolStatus::Live;
+                stats.tx_count = stats.tx_count.saturating_add(1);
+                stats.status = ProtocolStatus::Live;
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(_e) => {
-                cfg.sacn_status = ProtocolStatus::Error;
+                stats.status = ProtocolStatus::Error;
             }
         }
     }

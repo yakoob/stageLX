@@ -14,7 +14,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use stagelx_state::{IoConfig, Programmer, ProtocolStatus};
+use stagelx_state::{Programmer, ProtocolStatus};
+use crate::config::OscConfig;
+use crate::stats::OscStats;
 
 // ─── Incoming message ──────────────────────────────────────────────────────────
 
@@ -46,11 +48,11 @@ impl Default for OscState {
 // ─── Systems ──────────────────────────────────────────────────────────────────
 
 /// Open / close the UDP socket based on IoConfig.
-pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>) {
-    let want_open = cfg.osc_enabled;
+pub fn osc_manage_socket(mut state: ResMut<OscState>, cfg: ResMut<OscConfig>, mut stats: ResMut<OscStats>) {
+    let want_open = cfg.enabled;
 
     if want_open && state.bound_port.is_none() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), cfg.osc_port);
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), cfg.port);
         match UdpSocket::bind(addr) {
             Ok(sock) => {
                 // Use a short read timeout so the thread can poll the shutdown flag.
@@ -78,12 +80,12 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
                     }
                 });
                 info!("OSC listening on {}", addr);
-                cfg.osc_status = ProtocolStatus::Live;
-                state.bound_port = Some(cfg.osc_port);
+                stats.status = ProtocolStatus::Live;
+                state.bound_port = Some(cfg.port);
                 state.socket = Some(sock);
             }
             Err(_e) => {
-                cfg.osc_status = ProtocolStatus::Error;
+                stats.status = ProtocolStatus::Error;
             }
         }
     }
@@ -94,7 +96,7 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, mut cfg: ResMut<IoConfig>)
         state.socket = None;
         state.bound_port = None;
         state.shutdown = Arc::new(AtomicBool::new(false));
-        cfg.osc_status = ProtocolStatus::Idle;
+        stats.status = ProtocolStatus::Idle;
     }
 }
 
@@ -115,7 +117,7 @@ fn forward_packet(pkt: OscPacket, tx: &Sender<OscMsg>) {
 pub fn osc_receive(
     state: Res<OscState>,
     mut programmer: ResMut<Programmer>,
-    mut cfg: ResMut<IoConfig>,
+    mut stats: ResMut<OscStats>,
 ) {
     let mut count = 0u64;
     while let Ok(msg) = state.rx.try_recv() {
@@ -155,7 +157,7 @@ pub fn osc_receive(
             count += 1;
         }
     }
-    cfg.osc_rx_count = cfg.osc_rx_count.saturating_add(count);
+    stats.rx_count = stats.rx_count.saturating_add(count);
 }
 
 fn osc_float(t: &OscType) -> Option<f32> {

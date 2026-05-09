@@ -7,7 +7,9 @@
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use midir::MidiInput;
-use stagelx_state::{IoConfig, Programmer, ProtocolStatus};
+use stagelx_state::{Programmer, ProtocolStatus};
+use crate::config::MidiConfig;
+use crate::stats::MidiStats;
 
 // ─── State (NonSend — MidiInputConnection is !Sync) ───────────────────────────
 
@@ -34,7 +36,8 @@ impl Default for MidiState {
 /// Port scanning is rate-limited to ≤ 1 Hz (Rule 15).
 pub fn midi_manage_connection(
     mut state: NonSendMut<MidiState>,
-    mut cfg: ResMut<IoConfig>,
+    cfg: ResMut<MidiConfig>,
+    mut stats: ResMut<MidiStats>,
     time: Res<Time>,
 ) {
     // Rate-limit port scan to 1 Hz.
@@ -50,26 +53,26 @@ pub fn midi_manage_connection(
         }
     }
 
-    let want_open = cfg.midi_enabled && !cfg.midi_port.trim().is_empty();
+    let want_open = cfg.enabled && !cfg.port.trim().is_empty();
 
     if want_open && state.connection.is_none() {
-        let port_name = cfg.midi_port.trim().to_string();
+        let port_name = cfg.port.trim().to_string();
         let tx = state.tx.clone();
         match open_midi_port(&port_name, tx) {
             Ok(conn) => {
                 info!("MIDI connected: {}", port_name);
-                cfg.midi_status = ProtocolStatus::Live;
+                stats.status = ProtocolStatus::Live;
                 state.connection = Some(conn);
             }
             Err(_e) => {
-                cfg.midi_status = ProtocolStatus::Error;
+                stats.status = ProtocolStatus::Error;
             }
         }
     }
 
     if !want_open && state.connection.is_some() {
         state.connection = None;
-        cfg.midi_status = ProtocolStatus::Idle;
+        stats.status = ProtocolStatus::Idle;
         info!("MIDI disconnected");
     }
 }
@@ -78,7 +81,8 @@ pub fn midi_manage_connection(
 pub fn midi_receive(
     state: NonSendMut<MidiState>,
     mut programmer: ResMut<Programmer>,
-    mut cfg: ResMut<IoConfig>,
+    cfg: Res<MidiConfig>,
+    mut stats: ResMut<MidiStats>,
 ) {
     let mut count = 0u64;
     while let Ok(msg) = state.rx.try_recv() {
@@ -87,17 +91,17 @@ pub fn midi_receive(
         let cc  = msg[1];
         let val = msg[2] as f32 / 127.0;
 
-        if      cc == cfg.midi_cc_dimmer { programmer.dimmer     = val; }
-        else if cc == cfg.midi_cc_pan    { programmer.pan        = val; }
-        else if cc == cfg.midi_cc_tilt   { programmer.tilt       = val; }
-        else if cc == cfg.midi_cc_red    { programmer.color[0]   = val; }
-        else if cc == cfg.midi_cc_green  { programmer.color[1]   = val; }
-        else if cc == cfg.midi_cc_blue   { programmer.color[2]   = val; }
-        else if cc == cfg.midi_cc_zoom   { programmer.zoom       = val; }
-        else if cc == cfg.midi_cc_strobe { programmer.strobe     = val; }
+        if      cc == cfg.cc_dimmer { programmer.dimmer     = val; }
+        else if cc == cfg.cc_pan    { programmer.pan        = val; }
+        else if cc == cfg.cc_tilt   { programmer.tilt       = val; }
+        else if cc == cfg.cc_red    { programmer.color[0]   = val; }
+        else if cc == cfg.cc_green  { programmer.color[1]   = val; }
+        else if cc == cfg.cc_blue   { programmer.color[2]   = val; }
+        else if cc == cfg.cc_zoom   { programmer.zoom       = val; }
+        else if cc == cfg.cc_strobe { programmer.strobe     = val; }
         count += 1;
     }
-    cfg.midi_rx_count = cfg.midi_rx_count.saturating_add(count);
+    stats.rx_count = stats.rx_count.saturating_add(count);
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -113,7 +117,7 @@ fn open_midi_port(
         .ok_or("MIDI port not found")?;
     let conn = mi.connect(port, "stageLX-rx", move |_, msg, _| {
         if msg.len() >= 3 {
-            let _ = tx.send([msg[0], msg[1], msg[2]]);
+            let _ = tx.try_send([msg[0], msg[1], msg[2]]);
         }
     }, ())?;
     Ok(conn)

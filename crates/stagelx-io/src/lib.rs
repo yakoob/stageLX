@@ -1,8 +1,10 @@
 pub mod artnet;
+pub mod config;
 pub mod error;
 pub mod midi;
 pub mod osc;
 pub mod sacn;
+pub mod stats;
 pub mod supervisor;
 pub mod usb;
 
@@ -12,7 +14,13 @@ use artnet::{
     artnet_manage_socket, artnet_receive, artnet_send,
     dmx_engine_tick,
 };
+use config::{
+    ArtNetConfig, SacnConfig, UsbConfig, MidiConfig, OscConfig,
+};
 use sacn::{SacnState, sacn_manage_socket, sacn_receive, sacn_send};
+use stats::{
+    ArtNetStats, SacnStats, UsbStats, MidiStats, OscStats,
+};
 use usb::{UsbDmxState, usb_manage_device, usb_send};
 use midi::{MidiState, midi_manage_connection, midi_receive};
 use osc::{OscState, osc_manage_socket, osc_receive};
@@ -28,6 +36,19 @@ pub struct IoPlugin;
 impl Plugin for IoPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(DmxEngineRes::default())
+            // Per-protocol config (written rarely by UI)
+            .init_resource::<ArtNetConfig>()
+            .init_resource::<SacnConfig>()
+            .init_resource::<UsbConfig>()
+            .init_resource::<MidiConfig>()
+            .init_resource::<OscConfig>()
+            // Per-protocol stats (written per-frame by IO systems)
+            .init_resource::<ArtNetStats>()
+            .init_resource::<SacnStats>()
+            .init_resource::<UsbStats>()
+            .init_resource::<MidiStats>()
+            .init_resource::<OscStats>()
+            // Internal transport state
             .init_resource::<ArtNetState>()
             .init_resource::<SacnState>()
             .init_resource::<OscState>()

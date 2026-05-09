@@ -12,7 +12,9 @@ use std::io::Write;
 use bevy::prelude::*;
 use serialport::SerialPort;
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::{IoConfig, ProtocolStatus};
+use stagelx_state::ProtocolStatus;
+use crate::config::UsbConfig;
+use crate::stats::UsbStats;
 
 pub const ENTTEC_BAUD: u32 = 250_000;
 const LABEL_OUTPUT_DMX: u8 = 6;
@@ -36,12 +38,12 @@ impl Default for UsbDmxState {
 
 /// Open or close the USB serial device based on `IoConfig.usb_tx_enabled`.
 /// Runs in `Update` so it can respond quickly to config changes.
-pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, mut cfg: ResMut<IoConfig>) {
-    let port = cfg.usb_port.trim();
+pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, cfg: ResMut<UsbConfig>, mut stats: ResMut<UsbStats>) {
+    let port = cfg.port.trim();
 
-    if cfg.usb_tx_enabled && state.device.is_none() {
+    if cfg.tx_enabled && state.device.is_none() {
         if port.is_empty() {
-            cfg.usb_status = ProtocolStatus::Warn;
+            stats.status = ProtocolStatus::Warn;
             return;
         }
         match serialport::new(port, ENTTEC_BAUD)
@@ -50,18 +52,18 @@ pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, mut cfg: ResMut<IoC
         {
             Ok(dev) => {
                 info!("USB DMX opened: {}", port);
-                cfg.usb_status = ProtocolStatus::Live;
+                stats.status = ProtocolStatus::Live;
                 state.device = Some(dev);
             }
             Err(_e) => {
-                cfg.usb_status = ProtocolStatus::Error;
+                stats.status = ProtocolStatus::Error;
             }
         }
     }
 
-    if !cfg.usb_tx_enabled && state.device.is_some() {
+    if !cfg.tx_enabled && state.device.is_some() {
         state.device = None;
-        cfg.usb_status = ProtocolStatus::Idle;
+        stats.status = ProtocolStatus::Idle;
         info!("USB DMX closed");
     }
 }
@@ -71,23 +73,24 @@ pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, mut cfg: ResMut<IoC
 pub fn usb_send(
     mut state: NonSendMut<UsbDmxState>,
     engine: Res<DmxEngineRes>,
-    mut cfg: ResMut<IoConfig>,
+    cfg: Res<UsbConfig>,
+    mut stats: ResMut<UsbStats>,
 ) {
-    if !cfg.usb_tx_enabled {
+    if !cfg.tx_enabled {
         return;
     }
     let Some(ref mut dev) = state.device else { return };
 
-    let universe = cfg.usb_universe;
+    let universe = cfg.universe;
     if let Some(dmx_buf) = engine.0.output_buffer(universe) {
         let frame = build_enttec_frame(dmx_buf.as_bytes());
         match dev.write_all(&frame) {
             Ok(()) => {
-                cfg.usb_tx_count = cfg.usb_tx_count.saturating_add(1);
-                cfg.usb_status = ProtocolStatus::Live;
+                stats.tx_count = stats.tx_count.saturating_add(1);
+                stats.status = ProtocolStatus::Live;
             }
             Err(_e) => {
-                cfg.usb_status = ProtocolStatus::Error;
+                stats.status = ProtocolStatus::Error;
                 // Drop the device; usb_manage_device will try to re-open it.
                 state.device = None;
             }

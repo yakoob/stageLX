@@ -7,7 +7,9 @@ use std::{
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::{IoConfig, ProtocolStatus};
+use stagelx_state::ProtocolStatus;
+use crate::config::ArtNetConfig;
+use crate::stats::ArtNetStats;
 
 use crate::supervisor::IoSupervisor;
 
@@ -106,7 +108,7 @@ impl Default for ArtNetState {
 /// Manage the UDP socket lifetime based on IoConfig.
 pub fn artnet_manage_socket(
     mut state: ResMut<ArtNetState>,
-    cfg: Res<IoConfig>,
+    cfg: Res<ArtNetConfig>,
     supervisor: Res<IoSupervisor>,
 ) {
     if state.socket.is_none() {
@@ -117,7 +119,7 @@ pub fn artnet_manage_socket(
         if should_try {
             state.last_bind_attempt = Some(now);
             let bind_ip: IpAddr = cfg
-                .artnet_ip
+                .ip
                 .trim()
                 .parse()
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
@@ -134,7 +136,7 @@ pub fn artnet_manage_socket(
         }
     }
 
-    if cfg.artnet_rx_enabled && state.rx_chan.is_none() {
+    if cfg.rx_enabled && state.rx_chan.is_none() {
         // Clone the bound TX socket so both sides share the same port binding.
         // A second bind() to the same port would fail with EADDRINUSE.
         if let Some(ref sock) = state.socket {
@@ -183,19 +185,19 @@ pub fn artnet_manage_socket(
         }
     }
 
-    if !cfg.artnet_rx_enabled {
+    if !cfg.rx_enabled {
         state.rx_chan = None;
         state.rx_thread_tx = None;
     }
 
     // Rebuild the allowlist cache only when the config string actually changed.
-    if cfg.artnet_allowed_sources != state.cached_allowlist_src {
+    if cfg.allowed_sources != state.cached_allowlist_src {
         state.cached_allowlist = cfg
-            .artnet_allowed_sources
+            .allowed_sources
             .split(',')
             .filter_map(|s| s.trim().parse().ok())
             .collect();
-        state.cached_allowlist_src.clone_from(&cfg.artnet_allowed_sources);
+        state.cached_allowlist_src.clone_from(&cfg.allowed_sources);
     }
 
     // Sync thread-local drops into the supervisor.
@@ -215,7 +217,7 @@ pub fn artnet_manage_socket(
 pub fn artnet_receive(
     state: Res<ArtNetState>,
     mut engine: ResMut<DmxEngineRes>,
-    mut cfg: ResMut<IoConfig>,
+    mut stats: ResMut<ArtNetStats>,
 ) {
     let Some(rx) = &state.rx_chan else { return };
 
@@ -248,7 +250,7 @@ pub fn artnet_receive(
         buf.copy_from_slice(&pkt.data);
         count += 1;
     }
-    cfg.artnet_rx_count = cfg.artnet_rx_count.saturating_add(count);
+    stats.rx_count = stats.rx_count.saturating_add(count);
 }
 
 /// Merge all DMX sources into the output universe set.
@@ -262,30 +264,31 @@ pub fn dmx_engine_tick(mut engine: ResMut<DmxEngineRes>) {
 pub fn artnet_send(
     state: Res<ArtNetState>,
     engine: Res<DmxEngineRes>,
-    mut cfg: ResMut<IoConfig>,
+    cfg: Res<ArtNetConfig>,
+    mut stats: ResMut<ArtNetStats>,
 ) {
 
     let Some(sock) = &state.socket else { return };
 
     // #4 — Configurable TX destination (empty = limited broadcast)
     let dest_ip: IpAddr = cfg
-        .artnet_dest_ip
+        .dest_ip
         .trim()
         .parse()
         .unwrap_or(IpAddr::V4(Ipv4Addr::BROADCAST));
     let dest = SocketAddr::new(dest_ip, ARTNET_PORT);
 
-    let out_universe = cfg.artnet_out_universe;
+    let out_universe = cfg.out_universe;
     if let Some(dmx_buf) = engine.0.output_buffer(out_universe) {
         let pkt = build_artdmx(out_universe, dmx_buf.as_bytes());
         match sock.send_to(&pkt, dest) {
             Ok(_) => {
-                cfg.artnet_tx_count = cfg.artnet_tx_count.saturating_add(1);
-                cfg.artnet_status = ProtocolStatus::Live;
+                stats.tx_count = stats.tx_count.saturating_add(1);
+                stats.status = ProtocolStatus::Live;
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(_e) => {
-                cfg.artnet_status = ProtocolStatus::Error;
+                stats.status = ProtocolStatus::Error;
             }
         }
     }

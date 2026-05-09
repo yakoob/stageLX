@@ -11,9 +11,11 @@ use bevy_egui::egui::{Color32, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
 use std::collections::HashSet;
 
 pub use stagelx_state::{
-    DespawnFixtureEvent, FixtureLibraryRes, IoConfig, LoadVenueEvent, PatchEditState, PatchRes,
+    DespawnFixtureEvent, FixtureLibraryRes, LoadVenueEvent, PatchEditState, PatchRes,
     Programmer, SpawnFixtureEvent, VenueLoadState,
 };
+use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
+use stagelx_io::stats::{ArtNetStats, MidiStats, OscStats, SacnStats, UsbStats};
 use stagelx_core::types::FixtureId;
 
 use crate::theme::*;
@@ -139,7 +141,7 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<PatchRes>()
             .init_resource::<PatchEditState>()
             .init_resource::<FixtureLibraryRes>()
-            .init_resource::<IoConfig>()
+            // IO config/stats are initialised by stagelx_io::IoPlugin
             .init_resource::<VenueLoadState>()
             .init_resource::<UiLayoutState>()
             .init_resource::<PatchSelection>()
@@ -150,8 +152,109 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<FontsInstalled>()
             .add_systems(
                 EguiPrimaryContextPass,
-                ui_root_system,
+                (ui_root_system, io_panel_system).chain(),
             );
+    }
+}
+
+fn io_panel_system(
+    mut ctx: bevy_egui::EguiContexts,
+    mut layout: ResMut<UiLayoutState>,
+    mut io_state: ResMut<IoPanelState>,
+    mut artnet_cfg: ResMut<ArtNetConfig>,
+    artnet_stats: Res<ArtNetStats>,
+    mut sacn_cfg: ResMut<SacnConfig>,
+    sacn_stats: Res<SacnStats>,
+    mut usb_cfg: ResMut<UsbConfig>,
+    usb_stats: Res<UsbStats>,
+    mut midi_cfg: ResMut<MidiConfig>,
+    midi_stats: Res<MidiStats>,
+    mut osc_cfg: ResMut<OscConfig>,
+    osc_stats: Res<OscStats>,
+) {
+    let egui_ctx = ctx.ctx_mut().expect("egui context");
+
+    let float_frame = egui::Frame::window(&egui_ctx.style())
+        .fill(BG_PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 8],
+            blur: 24,
+            spread: 2,
+            color: Color32::from_black_alpha(102),
+        });
+
+    // ── Right rail (DMX I/O) ──────────────────────────────────────────────────
+    if !layout.detached.contains(&PanelKind::Io) {
+        egui::SidePanel::right("right_rail")
+            .exact_width(320.0)
+            .frame(egui::Frame::new().fill(BG_CHROME).inner_margin(egui::Margin::same(0)))
+            .show(egui_ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_min_size(Vec2::new(0.0, 28.0));
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("DMX I/O").size(10.0).strong().color(FG_SECONDARY));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if widgets::icon_btn_detach(ui).on_hover_text("Detach").clicked() {
+                            layout.detached.insert(PanelKind::Io);
+                        }
+                        let is_min = layout.minimized.contains(&PanelKind::Io);
+                        if widgets::icon_btn_minimize(ui).on_hover_text(if is_min { "Restore" } else { "Minimize" }).clicked() {
+                            if is_min { layout.minimized.remove(&PanelKind::Io); } else { layout.minimized.insert(PanelKind::Io); }
+                        }
+                    });
+                });
+                let p = ui.available_rect_before_wrap();
+                ui.painter().line_segment(
+                    [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                    Stroke::new(1.0, BORDER),
+                );
+
+                if !layout.minimized.contains(&PanelKind::Io) {
+                    io_panel::io_panel_docked(
+                        ui,
+                        &mut artnet_cfg,
+                        &artnet_stats,
+                        &mut sacn_cfg,
+                        &sacn_stats,
+                        &mut usb_cfg,
+                        &usb_stats,
+                        &mut midi_cfg,
+                        &midi_stats,
+                        &mut osc_cfg,
+                        &osc_stats,
+                        &mut io_state,
+                    );
+                }
+            });
+    }
+
+    // ── Detached floating IO window ───────────────────────────────────────────
+    if layout.detached.contains(&PanelKind::Io) {
+        egui::Window::new("DMX I/O")
+            .default_pos([1000.0, 100.0])
+            .default_width(360.0)
+            .resizable(true)
+            .frame(float_frame)
+            .show(egui_ctx, |ui| {
+                io_panel::io_panel_docked(
+                    ui,
+                    &mut artnet_cfg,
+                    &artnet_stats,
+                    &mut sacn_cfg,
+                    &sacn_stats,
+                    &mut usb_cfg,
+                    &usb_stats,
+                    &mut midi_cfg,
+                    &midi_stats,
+                    &mut osc_cfg,
+                    &osc_stats,
+                    &mut io_state,
+                );
+                if ui.button("Re-dock").clicked() {
+                    layout.detached.remove(&PanelKind::Io);
+                }
+            });
     }
 }
 
@@ -188,8 +291,6 @@ fn ui_root_system(
     mut patch: ResMut<PatchRes>,
     mut patch_edit: ResMut<PatchEditState>,
     mut library: ResMut<FixtureLibraryRes>,
-    mut io_cfg: ResMut<IoConfig>,
-    mut io_state: ResMut<IoPanelState>,
     mut venue_state: ResMut<VenueLoadState>,
     mut app_mode: ResMut<AppMode>,
     show_meta: Res<ShowMeta>,
@@ -384,38 +485,6 @@ fn ui_root_system(
 
                 if !layout.minimized.contains(&PanelKind::Programmer) {
                     programmer::programmer_panel_docked(ui, &mut prog, &patch_sel, &patch);
-                }
-            });
-    }
-
-    // ── Right rail (DMX I/O) ──────────────────────────────────────────────────
-    if !layout.detached.contains(&PanelKind::Io) {
-        egui::SidePanel::right("right_rail")
-            .exact_width(320.0)
-            .frame(egui::Frame::new().fill(BG_CHROME).inner_margin(egui::Margin::same(0)))
-            .show(egui_ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.set_min_size(Vec2::new(0.0, 28.0));
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("DMX I/O").size(10.0).strong().color(FG_SECONDARY));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::icon_btn_detach(ui).on_hover_text("Detach").clicked() {
-                            layout.detached.insert(PanelKind::Io);
-                        }
-                        let is_min = layout.minimized.contains(&PanelKind::Io);
-                        if widgets::icon_btn_minimize(ui).on_hover_text(if is_min { "Restore" } else { "Minimize" }).clicked() {
-                            if is_min { layout.minimized.remove(&PanelKind::Io); } else { layout.minimized.insert(PanelKind::Io); }
-                        }
-                    });
-                });
-                let p = ui.available_rect_before_wrap();
-                ui.painter().line_segment(
-                    [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
-                    Stroke::new(1.0, BORDER),
-                );
-
-                if !layout.minimized.contains(&PanelKind::Io) {
-                    io_panel::io_panel_docked(ui, &mut io_cfg, &mut io_state);
                 }
             });
     }
@@ -663,17 +732,5 @@ fn ui_root_system(
                 }
             });
     }
-    if layout.detached.contains(&PanelKind::Io) {
-        egui::Window::new("DMX I/O")
-            .default_pos([1000.0, 100.0])
-            .default_width(360.0)
-            .resizable(true)
-            .frame(float_frame)
-            .show(egui_ctx, |ui| {
-                io_panel::io_panel_docked(ui, &mut io_cfg, &mut io_state);
-                if ui.button("Re-dock").clicked() {
-                    layout.detached.remove(&PanelKind::Io);
-                }
-            });
-    }
+
 }
