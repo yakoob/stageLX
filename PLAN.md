@@ -619,15 +619,35 @@ MIDI input (`midir` + crossbeam); OSC input (`rosc`); MIDI + OSC config UI; MVR 
 
 ---
 
-### 6.6 Test Corpus & Fixture Validation
+### 6.6 Test Corpus & Fixture Validation ✅
 
 **Goal:** Build confidence in GDTF parser robustness.
 
-- [ ] Download 30 fixture files from gdtf-share.com (cross-manufacturer sample)
-- [ ] Create `tests/fixture_corpus/` directory (git-LFS or ignored)
-- [ ] Write `gdtf_parser_tests` — parse every file, assert no panic, assert ≥1 DMX mode
-- [ ] Report parsing failures as structured issues (manufacturer, model, error)
-- [ ] CI: `cargo test --workspace` runs corpus tests
+**Two-layer testing strategy:**
+
+**Layer 1 — Synthetic unit tests (guaranteed CI coverage):**
+- ✅ 10 unit tests in `stagelx-gdtf/src/gdtf.rs` covering:
+  - Minimal valid GDTF (single mode, single channel)
+  - Missing `description.xml` (expects `Err`)
+  - Empty DMX modes
+  - Multiple modes (3 modes, varying channel counts)
+  - Nested geometry tree with beam (Body → Yoke → Head)
+  - Wheels and slots (color wheel + gobo wheel)
+  - Channel attributes (Dimmer, Pan, Tilt, Zoom, RGB)
+  - Malformed XML (handled gracefully)
+  - `parse_offset` edge cases
+  - `parse_default_value` edge cases
+- Tests use `zip::ZipWriter` over `Cursor<Vec<u8>>` to create synthetic GDTF ZIPs in memory
+
+**Layer 2 — Optional corpus integration test:**
+- ✅ `crates/stagelx-gdtf/tests/corpus.rs` scans `tests/fixture_corpus/*.gdtf`
+- Parses each file, asserts `Ok` and `≥1 DMX mode`
+- Prints structured per-file report (mode count, channel count)
+- Skips gracefully when directory is empty or missing
+- `tests/fixture_corpus/` created with `.gitkeep` and `README.md`
+- `.gitignore` excludes `*.gdtf` and `*.zip` from corpus directory
+
+**Note:** GDTF Share API requires authentication, so corpus files must be downloaded manually. The README documents the curl-based download workflow.
 
 ---
 

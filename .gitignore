@@ -4,4 +4,6 @@ Cargo.lock
 *.mvr
 .DS_Store
 *.zip
+tests/fixture_corpus/*.gdtf
+tests/fixture_corpus/*.zip
 show.json

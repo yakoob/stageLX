@@ -478,3 +478,314 @@ impl DmxMode {
         self.channels.iter().find(|c| c.attribute == attribute)
     }
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    /// Build an in-memory GDTF ZIP containing `description.xml`.
+    fn make_gdtf_zip(description_xml: &str) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer.start_file("description.xml", SimpleFileOptions::default()).unwrap();
+        writer.write_all(description_xml.as_bytes()).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn minimal_valid() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.1">
+  <FixtureType Name="Test Fixture" ShortName="TF" Manufacturer="TestCo"
+               Description="A test fixture" FixtureTypeID="123e4567-e89b-12d3-a456-426614174000">
+    <DMXModes>
+      <DMXMode Name="Basic" Geometry="Body">
+        <DMXChannels>
+          <DMXChannel Offset="1" Default="128/1" Geometry="Body">
+            <LogicalChannel Attribute="Dimmer">
+              <ChannelFunction PhysicalFrom="0" PhysicalTo="1"/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+        let ft = parse_gdtf(&make_gdtf_zip(xml)).unwrap();
+        assert_eq!(ft.name, "Test Fixture");
+        assert_eq!(ft.short_name, "TF");
+        assert_eq!(ft.manufacturer, "TestCo");
+        assert_eq!(ft.fixture_type_id, "123e4567-e89b-12d3-a456-426614174000");
+        assert_eq!(ft.dmx_modes.len(), 1);
+        let mode = &ft.dmx_modes[0];
+        assert_eq!(mode.name, "Basic");
+        assert_eq!(mode.channels.len(), 1);
+        let ch = &mode.channels[0];
+        assert_eq!(ch.offset, 1);
+        assert_eq!(ch.resolution, 1);
+        assert_eq!(ch.attribute, "Dimmer");
+        assert_eq!(ch.default_value, 128);
+        assert_eq!(ch.physical_from, 0.0);
+        assert_eq!(ch.physical_to, 1.0);
+    }
+
+    #[test]
+    fn missing_description_xml() {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer.start_file("readme.txt", SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"hello").unwrap();
+        let buf = writer.finish().unwrap().into_inner();
+        assert!(parse_gdtf(&buf).is_err());
+    }
+
+    #[test]
+    fn empty_dmx_modes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.1">
+  <FixtureType Name="Empty" ShortName="E" Manufacturer="None"
+               Description="No modes" FixtureTypeID="00000000-0000-0000-0000-000000000000">
+    <DMXModes/>
+  </FixtureType>
+</GDTF>"#;
+        let ft = parse_gdtf(&make_gdtf_zip(xml)).unwrap();
+        assert!(ft.dmx_modes.is_empty());
+    }
+
+    #[test]
+    fn multiple_modes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.1">
+  <FixtureType Name="Multi" ShortName="M" Manufacturer="Co"
+               Description="Three modes" FixtureTypeID="11111111-1111-1111-1111-111111111111">
+    <DMXModes>
+      <DMXMode Name="8ch" Geometry="Body">
+        <DMXChannels>
+          <DMXChannel Offset="1" Default="0/1" Geometry="Body">
+            <LogicalChannel Attribute="Dimmer">
+              <ChannelFunction PhysicalFrom="0" PhysicalTo="1"/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+      <DMXMode Name="16ch" Geometry="Body">
+        <DMXChannels>
+          <DMXChannel Offset="1" Default="0/1" Geometry="Body">
+            <LogicalChannel Attribute="Dimmer">
+              <ChannelFunction PhysicalFrom="0" PhysicalTo="1"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="2" Default="0/1" Geometry="Body">
+            <LogicalChannel Attribute="Pan">
+              <ChannelFunction PhysicalFrom="-270" PhysicalTo="270"/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+      <DMXMode Name="32ch" Geometry="Body">
+        <DMXChannels>
+          <DMXChannel Offset="1,2" Default="0/2" Geometry="Body">
+            <LogicalChannel Attribute="Pan">
+              <ChannelFunction PhysicalFrom="-270" PhysicalTo="270"/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+        let ft = parse_gdtf(&make_gdtf_zip(xml)).unwrap();
+        assert_eq!(ft.dmx_modes.len(), 3);
+        assert_eq!(ft.dmx_modes[0].name, "8ch");
+        assert_eq!(ft.dmx_modes[1].name, "16ch");
+        assert_eq!(ft.dmx_modes[2].name, "32ch");
+        assert_eq!(ft.dmx_modes[2].channels[0].resolution, 2);
+    }
+
+    #[test]
+    fn nested_geometry_with_beam() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.1">
+  <FixtureType Name="Moving Head" ShortName="MH" Manufacturer="Co"
+               Description="MH with beam" FixtureTypeID="22222222-2222-2222-2222-222222222222">
+    <Geometries>
+      <Geometry Name="Body">
+        <Geometry Name="Yoke">
+          <BeamGeometry Name="Head" BeamAngle="15.0" FieldAngle="20.0" BeamType="Spot"/>
+        </Geometry>
+      </Geometry>
+    </Geometries>
+    <DMXModes>
+      <DMXMode Name="Basic" Geometry="Body">
+        <DMXChannels/>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+        let ft = parse_gdtf(&make_gdtf_zip(xml)).unwrap();
+        assert_eq!(ft.geometries.len(), 1);
+        let body = &ft.geometries[0];
+        assert_eq!(body.name, "Body");
+        assert_eq!(body.children.len(), 1);
+        let yoke = &body.children[0];
+        assert_eq!(yoke.name, "Yoke");
+        assert_eq!(yoke.children.len(), 1);
+        let head = &yoke.children[0];
+        assert_eq!(head.name, "Head");
+        assert_eq!(head.geometry_type, GeometryType::Beam {
+            beam_angle: 15.0,
+            field_angle: 20.0,
+            beam_type: BeamType::Spot,
+        });
+        assert_eq!(ft.beam_angle(), 15.0);
+    }
+
+    #[test]
+    fn wheels_and_slots() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.1">
+  <FixtureType Name="WheelFixture" ShortName="WF" Manufacturer="Co"
+               Description="Wheels" FixtureTypeID="33333333-3333-3333-3333-333333333333">
+    <Wheels>
+      <Wheel Name="ColorWheel">
+        <Slot Name="Open" Color="0.3127,0.3290,100"/>
+        <Slot Name="Red" Color="0.6400,0.3300,100"/>
+        <Slot Name="Gobo1" MediaFileName="gobo1.png"/>
+      </Wheel>
+    </Wheels>
+    <DMXModes>
+      <DMXMode Name="Basic" Geometry="Body">
+        <DMXChannels/>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+        let ft = parse_gdtf(&make_gdtf_zip(xml)).unwrap();
+        assert_eq!(ft.wheels.len(), 1);
+        let wheel = &ft.wheels[0];
+        assert_eq!(wheel.name, "ColorWheel");
+        assert_eq!(wheel.slots.len(), 3);
+        assert!(wheel.slots[0].color.is_some());
+        assert_eq!(wheel.slots[0].color.unwrap(), [0.3127, 0.3290, 100.0]);
+        assert!(wheel.slots[2].media_file.is_some());
+        assert_eq!(wheel.slots[2].media_file.as_deref().unwrap(), "gobo1.png");
+    }
+
+    #[test]
+    fn channel_attributes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.1">
+  <FixtureType Name="AttrFixture" ShortName="AF" Manufacturer="Co"
+               Description="All attrs" FixtureTypeID="44444444-4444-4444-4444-444444444444">
+    <DMXModes>
+      <DMXMode Name="Full" Geometry="Body">
+        <DMXChannels>
+          <DMXChannel Offset="1" Default="0/1" Geometry="Body">
+            <LogicalChannel Attribute="Dimmer">
+              <ChannelFunction PhysicalFrom="0" PhysicalTo="1"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="2,3" Default="0/2" Geometry="Body">
+            <LogicalChannel Attribute="Pan">
+              <ChannelFunction PhysicalFrom="-270" PhysicalTo="270"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="4,5" Default="0/2" Geometry="Body">
+            <LogicalChannel Attribute="Tilt">
+              <ChannelFunction PhysicalFrom="-130" PhysicalTo="130"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="6" Default="0/1" Geometry="Body">
+            <LogicalChannel Attribute="Zoom">
+              <ChannelFunction PhysicalFrom="5" PhysicalTo="45"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="7" Default="255/1" Geometry="Body">
+            <LogicalChannel Attribute="ColorAdd_R">
+              <ChannelFunction PhysicalFrom="0" PhysicalTo="1"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="8" Default="255/1" Geometry="Body">
+            <LogicalChannel Attribute="ColorAdd_G">
+              <ChannelFunction PhysicalFrom="0" PhysicalTo="1"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="9" Default="255/1" Geometry="Body">
+            <LogicalChannel Attribute="ColorAdd_B">
+              <ChannelFunction PhysicalFrom="0" PhysicalTo="1"/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+        let ft = parse_gdtf(&make_gdtf_zip(xml)).unwrap();
+        let mode = ft.find_mode("Full").unwrap();
+        assert!(mode.channel_for("Dimmer").is_some());
+        assert!(mode.channel_for("Pan").is_some());
+        assert!(mode.channel_for("Tilt").is_some());
+        assert!(mode.channel_for("Zoom").is_some());
+        assert!(mode.channel_for("ColorAdd_R").is_some());
+        assert!(mode.channel_for("ColorAdd_G").is_some());
+        assert!(mode.channel_for("ColorAdd_B").is_some());
+
+        let pan = mode.channel_for("Pan").unwrap();
+        assert_eq!(pan.offset, 2);
+        assert_eq!(pan.resolution, 2);
+        assert_eq!(pan.physical_from, -270.0);
+        assert_eq!(pan.physical_to, 270.0);
+
+        let map = ft.channel_map("Full");
+        assert!(map.dimmer.is_some());
+        assert!(map.pan.is_some());
+        assert!(map.tilt.is_some());
+        assert!(map.red.is_some());
+        assert!(map.green.is_some());
+        assert!(map.blue.is_some());
+    }
+
+    #[test]
+    fn malformed_xml() {
+        let xml = r#"<?xml version="1.0"?>
+<GDTF>
+  <FixtureType Name="Broken">
+    <DMXModes>
+      <DMXMode Name="Mode">
+        <DMXChannels>
+          <DMXChannel Offset="1">
+            <LogicalChannel Attribute="Dimmer">
+              <ChannelFunction/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+        let ft = parse_gdtf(&make_gdtf_zip(xml)).unwrap();
+        // Even "malformed" in the sense of missing attributes is handled gracefully.
+        assert_eq!(ft.name, "Broken");
+        assert_eq!(ft.dmx_modes.len(), 1);
+    }
+
+    #[test]
+    fn parse_offset_cases() {
+        assert_eq!(super::parse_offset("1"), (1, 1));
+        assert_eq!(super::parse_offset("2,3"), (2, 2));
+        assert_eq!(super::parse_offset("  5 , 6  "), (5, 2));
+        assert_eq!(super::parse_offset(""), (1, 1));
+        assert_eq!(super::parse_offset("abc"), (1, 1));
+    }
+
+    #[test]
+    fn parse_default_value_cases() {
+        assert_eq!(super::parse_default_value("128/1", 1), 128);
+        assert_eq!(super::parse_default_value("32768/2", 2), 128); // 32768 >> 8
+        assert_eq!(super::parse_default_value("0/1", 1), 0);
+        assert_eq!(super::parse_default_value("512", 1), 255); // clamped
+        assert_eq!(super::parse_default_value("", 1), 0);
+    }
+}
