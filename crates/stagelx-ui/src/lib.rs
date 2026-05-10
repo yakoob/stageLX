@@ -14,8 +14,9 @@ use std::collections::HashSet;
 pub use stagelx_patch::{DespawnFixtureEvent, PatchEditState, PatchRes, SpawnFixtureEvent};
 pub use stagelx_show::{
     BackCueEvent, CuePlayhead, CueStack, DeleteCueEvent, FixtureLibraryRes,
-    GoCueEvent, LoadMvrStructureEvent, LoadVenueEvent, MvrStructureObject,
-    PerfDiagnosticsRes, Programmer, RecordCueEvent, VenueLoadState,
+    GoCueEvent, LoadMvrStructureEvent, LoadShowEvent, LoadVenueEvent,
+    MvrStructureObject, PerfDiagnosticsRes, Programmer, RecordCueEvent,
+    SaveShowEvent, VenueLoadState,
 };
 use stagelx_io::artnet::ArtNetNodeTable;
 use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
@@ -104,10 +105,32 @@ impl Default for ShowMeta {
     }
 }
 
+/// Tracks an async file dialog for Open Show (Ctrl+O).
 #[derive(Resource, Default)]
-pub struct RuntimeStats {
-    pub fps: f32,   // TODO(stub)
-    pub cpu_pct: f32, // TODO(stub)
+struct OpenShowDialog {
+    pending: Option<std::thread::JoinHandle<Option<String>>>,
+}
+
+impl OpenShowDialog {
+    fn spawn() -> Self {
+        let handle = std::thread::spawn(|| {
+            rfd::FileDialog::new()
+                .add_filter("Show", &["slx"])
+                .pick_file()
+                .map(|p| p.to_string_lossy().to_string())
+        });
+        Self { pending: Some(handle) }
+    }
+
+    fn try_take(&mut self) -> Option<String> {
+        let handle = self.pending.take()?;
+        if handle.is_finished() {
+            handle.join().ok().flatten()
+        } else {
+            self.pending = Some(handle);
+            None
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -172,6 +195,7 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<FixtureLibraryRes>()
             .init_resource::<CueStack>()
             .init_resource::<CuePlayhead>()
+            .init_resource::<stagelx_show::CaptureMode>()
             // IO config/stats are initialised by stagelx_io::IoPlugin
             .init_resource::<VenueLoadState>()
             .init_resource::<UiLayoutState>()
@@ -179,7 +203,7 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<IoPanelState>()
             .init_resource::<AppMode>()
             .init_resource::<ShowMeta>()
-            .init_resource::<RuntimeStats>()
+            .init_resource::<OpenShowDialog>()
             .init_resource::<FontsInstalled>()
             .add_systems(EguiPrimaryContextPass, ui_root_system)
             .add_systems(EguiPrimaryContextPass, io_panel_system)
@@ -187,6 +211,7 @@ impl Plugin for StageLxUiPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn io_panel_system(
     mut ctx: bevy_egui::EguiContexts,
     mut layout: ResMut<UiLayoutState>,
@@ -333,15 +358,17 @@ fn install_fonts(ctx: &egui::Context) {
 // Root UI system — layout shell
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(clippy::too_many_arguments)]
 fn ui_root_system(
     mut ctx: bevy_egui::EguiContexts,
     mut state: UiMutableState,
-    stack: Res<CueStack>,
+    mut stack: ResMut<CueStack>,
     playhead: Res<CuePlayhead>,
+    mut capture_mode: ResMut<stagelx_show::CaptureMode>,
     show_meta: Res<ShowMeta>,
-    runtime_stats: Res<RuntimeStats>,
     perf: Res<PerfDiagnosticsRes>,
     io_stats: IoStats,
+    mut open_dialog: ResMut<OpenShowDialog>,
     mut commands: Commands,
     windows: Query<&Window>,
 ) {
@@ -362,6 +389,17 @@ fn ui_root_system(
     if !fonts_installed.0 {
         install_fonts(egui_ctx);
         fonts_installed.0 = true;
+    }
+
+    // ── Global keyboard shortcuts ─────────────────────────────────────────────
+    if egui_ctx.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.command) {
+        commands.trigger(SaveShowEvent);
+    }
+    if egui_ctx.input(|i| i.key_pressed(egui::Key::O) && i.modifiers.command) {
+        *open_dialog = OpenShowDialog::spawn();
+    }
+    if let Some(path) = open_dialog.try_take() {
+        commands.trigger(LoadShowEvent { path });
     }
 
     // Apply global dark style
@@ -460,10 +498,21 @@ fn ui_root_system(
                     }
                     ui.add_space(12.0);
 
-                    // FPS / CPU (placeholder)
-                    ui.label(RichText::new(format!("CPU {:.0}%", runtime_stats.cpu_pct)).size(10.0).monospace().color(FG_MUTED));
+                    // FPS / CPU — computed from perf diagnostics
+                    let fps = if perf.frame_time_ms > 0.0 {
+                        1000.0 / perf.frame_time_ms
+                    } else {
+                        0.0
+                    };
+                    let cpu_ms = perf.beam_articulate_ms
+                        + perf.beam_lod_eval_ms
+                        + perf.beam_lod_apply_ms
+                        + perf.beam_sort_ms
+                        + perf.dmx_tick_last_ms;
+                    let cpu_pct = (cpu_ms / 16.667).clamp(0.0, 99.9);
+                    ui.label(RichText::new(format!("CPU {:.0}%", cpu_pct)).size(10.0).monospace().color(FG_MUTED));
                     ui.add_space(10.0);
-                    ui.label(RichText::new(format!("FPS {:.1}", runtime_stats.fps)).size(10.0).monospace().color(FG_MUTED));
+                    ui.label(RichText::new(format!("FPS {:.1}", fps)).size(10.0).monospace().color(FG_MUTED));
                     ui.add_space(14.0);
 
                     // Protocol pills — linked to real I/O stats
@@ -488,6 +537,35 @@ fn ui_root_system(
 
     // ── Status bar ────────────────────────────────────────────────────────────
     if layout.show_status_bar {
+        // Compute live metrics.
+        let fps = if perf.frame_time_ms > 0.0 {
+            1000.0 / perf.frame_time_ms
+        } else {
+            0.0
+        };
+        let cpu_ms = perf.beam_articulate_ms
+            + perf.beam_lod_eval_ms
+            + perf.beam_lod_apply_ms
+            + perf.beam_sort_ms
+            + perf.dmx_tick_last_ms;
+        let cpu_pct = (cpu_ms / 16.667).clamp(0.0, 99.9);
+
+        // Universe channel counts.
+        let mut universe_max_ch: std::collections::HashMap<u16, u16> = std::collections::HashMap::new();
+        for inst in patch.0.fixtures() {
+            let addr = inst.address.channel;
+            let u = inst.address.universe;
+            let max = universe_max_ch.entry(u).or_insert(0);
+            *max = (*max).max(addr + 8); // rough: 8 ch per fixture
+        }
+        let u1_text = universe_max_ch.get(&1).map(|m| format!("U1 {}/512", m.min(&512))).unwrap_or_else(|| "U1 —".into());
+        let u2_text = universe_max_ch.get(&2).map(|m| format!("U2 {}/512", m.min(&512))).unwrap_or_else(|| "U2 —".into());
+
+        let venue_name = std::path::Path::new(&venue_state.import_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("—");
+
         egui::TopBottomPanel::bottom("status_bar")
             .exact_height(22.0)
             .frame(egui::Frame::new().fill(BG_CHROME).inner_margin(egui::Margin::same(0)))
@@ -500,17 +578,19 @@ fn ui_root_system(
                     let count = patch.0.len();
                     ui.label(status_bar_text(format!("{} patched", count)));
                     ui.label(status_bar_text("·"));
-                    ui.label(status_bar_text("U1 81/512")); // TODO(stub): derive from PatchRes
+                    ui.label(status_bar_text(u1_text));
                     ui.label(status_bar_text("·"));
-                    ui.label(status_bar_text("U2 65/512")); // TODO(stub): derive from PatchRes
+                    ui.label(status_bar_text(u2_text));
 
                     // Right-aligned section
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(status_bar_text("BPM 128.0")); // TODO(stub)
+                        ui.label(status_bar_text(format!("{:.1} FPS", fps)));
+                        ui.label(status_bar_text("·"));
+                        ui.label(status_bar_text(format!("CPU {:.0}%", cpu_pct)));
                         ui.label(status_bar_text("·"));
                         ui.label(RichText::new("● record armed").size(10.0).monospace().color(RX));
                         ui.label(status_bar_text("·"));
-                        ui.label(status_bar_text("arena-mainstage.glb")); // TODO(stub)
+                        ui.label(status_bar_text(venue_name));
                     });
                 });
             });
@@ -544,7 +624,7 @@ fn ui_root_system(
                         Stroke::new(1.0, BORDER),
                     );
                     if !layout.minimized.contains(&PanelKind::Cue) {
-                        cue::cue_panel_docked(ui, &stack, &playhead, &mut commands);
+                        cue::cue_panel_docked(ui, &mut stack, &playhead, &mut capture_mode, &mut commands);
                     }
                     // Divider before Programmer
                     if !layout.detached.contains(&PanelKind::Programmer) {
@@ -838,7 +918,7 @@ fn ui_root_system(
             .resizable(true)
             .frame(float_frame)
             .show(egui_ctx, |ui| {
-                cue::cue_panel_docked(ui, &stack, &playhead, &mut commands);
+                cue::cue_panel_docked(ui, &mut stack, &playhead, &mut capture_mode, &mut commands);
                 if ui.button("Re-dock").clicked() {
                     layout.detached.remove(&PanelKind::Cue);
                 }

@@ -113,6 +113,7 @@ fn on_load_mvr_structure(
 
 // ─── Demo fixture startup ─────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_demo_fixtures(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

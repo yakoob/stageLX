@@ -297,7 +297,7 @@ pub fn sacn_manage_socket(
     // ── Create socket if missing ──────────────────────────────────────────────
     if wants_io && state.socket.is_none() {
         let now = std::time::Instant::now();
-        let should_try = state.last_bind_attempt.map_or(true, |t| {
+        let should_try = state.last_bind_attempt.is_none_or(|t| {
             now.duration_since(t).as_secs_f32() >= 1.0
         });
         if should_try {
@@ -384,21 +384,19 @@ pub fn sacn_manage_socket(
     }
 
     // ── Release socket when both TX and RX are disabled ───────────────────────
-    if !wants_io {
-        if state.socket.is_some() {
-            // Signal both threads before dropping the socket.
-            if let Some(shutdown) = state.rx_shutdown.take() {
-                let _ = shutdown.try_send(());
-            }
-            if let Some(shutdown) = state.tx_shutdown.take() {
-                let _ = shutdown.try_send(());
-            }
-            state.socket = None;
-            state.rx_chan = None;
-            state.tx_chan = None;
-            state.rx_handle = None;
-            state.tx_handle = None;
+    if !wants_io && state.socket.is_some() {
+        // Signal both threads before dropping the socket.
+        if let Some(shutdown) = state.rx_shutdown.take() {
+            let _ = shutdown.try_send(());
         }
+        if let Some(shutdown) = state.tx_shutdown.take() {
+            let _ = shutdown.try_send(());
+        }
+        state.socket = None;
+        state.rx_chan = None;
+        state.tx_chan = None;
+        state.rx_handle = None;
+        state.tx_handle = None;
     }
 
     // ── Sync thread-local drops into the supervisor ───────────────────────────

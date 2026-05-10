@@ -4,14 +4,8 @@ use stagelx_core::universe::{DmxBuffer, UniverseSet};
 use crate::merge::MergeStrategy;
 
 /// Bevy Resource wrapper around the DMX engine.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct DmxEngineRes(pub DmxEngine);
-
-impl Default for DmxEngineRes {
-    fn default() -> Self {
-        Self(DmxEngine::default())
-    }
-}
 
 /// Priority-ordered DMX source.
 #[derive(Debug)]

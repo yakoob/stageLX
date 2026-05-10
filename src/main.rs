@@ -5,12 +5,13 @@ use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::log::LogPlugin;
 use bevy::render::camera::CameraRenderGraph;
 use bevy_egui::{EguiContext, EguiGlobalSettings, EguiPlugin, PrimaryEguiContext};
-use stagelx_dmx::cue_to_dmx;
+use stagelx_dmx::{cue_to_dmx, on_record_stage_cue};
 use stagelx_io::{IoPlugin, dmx_engine_tick};
 use stagelx_render::StageLxRenderPlugin;
 use stagelx_show::{
-    load_cue_stack_on_startup,
-    on_back_cue, on_delete_cue, on_go_cue, on_record_cue,
+    auto_load_show_on_startup,
+    on_back_cue, on_delete_cue, on_go_cue, on_load_cue_into_programmer,
+    on_load_show, on_record_cue, on_save_show, on_update_cue,
 };
 use stagelx_ui::StageLxUiPlugin;
 
@@ -59,12 +60,17 @@ fn main() {
             ..default()
         })
         .add_systems(PreStartup, setup_ui_camera)
-        .add_systems(Startup, (load_cue_stack_on_startup, print_controls).chain())
+        .add_systems(Startup, (auto_load_show_on_startup, print_controls).chain())
         .add_plugins(StageLxUiPlugin)
         .add_plugins(StageLxRenderPlugin)
         .add_plugins(IoPlugin)
         // Cue event handlers (observers)
         .add_observer(on_record_cue)
+        .add_observer(on_record_stage_cue)
+        .add_observer(on_load_cue_into_programmer)
+        .add_observer(on_update_cue)
+        .add_observer(on_save_show)
+        .add_observer(on_load_show)
         .add_observer(on_go_cue)
         .add_observer(on_back_cue)
         .add_observer(on_delete_cue)

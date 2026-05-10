@@ -4,7 +4,7 @@ use crate::fixture::FixtureInstance;
 use crate::types::FixtureId;
 
 /// Maps fixture IDs to their patched instances.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Patch {
     fixtures: HashMap<FixtureId, FixtureInstance>,
     next_id: u32,

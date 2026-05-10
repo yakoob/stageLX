@@ -7,7 +7,9 @@ use bevy::prelude::*;
 use stagelx_gdtf::FixtureLibrary;
 
 pub mod cue;
+pub mod show_file;
 pub use cue::*;
+pub use show_file::*;
 
 // ─── Events ───────────────────────────────────────────────────────────────────
 

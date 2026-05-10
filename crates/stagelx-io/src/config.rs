@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 // ─── Art-Net ──────────────────────────────────────────────────────────────────
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct ArtNetConfig {
     /// Local IP to bind (empty = 0.0.0.0).
     pub ip: String,
@@ -21,19 +21,6 @@ pub struct ArtNetConfig {
     pub allowed_sources: String,
     /// Enable Art-Net node discovery (ArtPoll/ArtPollReply).
     pub discovery_enabled: bool,
-}
-
-impl Default for ArtNetConfig {
-    fn default() -> Self {
-        Self {
-            ip: String::new(),
-            out_universe: 0,
-            dest_ip: String::new(),
-            rx_enabled: false,
-            allowed_sources: String::new(),
-            discovery_enabled: false,
-        }
-    }
 }
 
 // ─── sACN (E1.31) ─────────────────────────────────────────────────────────────
@@ -109,6 +96,9 @@ pub struct MidiConfig {
     pub cc_blue: u8,
     pub cc_zoom: u8,
     pub cc_strobe: u8,
+    /// MIDI note numbers for cue triggers (None = disabled).
+    pub note_go: Option<u8>,
+    pub note_back: Option<u8>,
 }
 
 impl Default for MidiConfig {
@@ -125,6 +115,8 @@ impl Default for MidiConfig {
             cc_blue: 14,
             cc_zoom: 15,
             cc_strobe: 16,
+            note_go: None,
+            note_back: None,
         }
     }
 }

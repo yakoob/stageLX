@@ -118,7 +118,7 @@ pub fn programmer_panel_docked(
             .default_value(0.0)
             .decimals(1)
             .unit("°")
-            .sub("ABS"));
+            .sub_label("ABS"));
         prog.pan = (pan_val / prog.pan_range) + 0.5;
 
         ui.add_space(14.0);
@@ -130,7 +130,7 @@ pub fn programmer_panel_docked(
             .default_value(0.0)
             .decimals(1)
             .unit("°")
-            .sub("ABS"));
+            .sub_label("ABS"));
         prog.tilt = (tilt_val / prog.tilt_range) + 0.5;
 
         ui.add_space(14.0);
@@ -142,7 +142,7 @@ pub fn programmer_panel_docked(
             .default_value(25.0)
             .decimals(0)
             .unit("°")
-            .sub("BEAM"));
+            .sub_label("BEAM"));
         prog.zoom = (zoom_val - 5.0) / 40.0;
     });
 

@@ -72,6 +72,7 @@ impl Default for FixtureSpawnConfig {
 // ─── Observers (Bevy 0.18 event pattern) ─────────────────────────────────────
 
 /// Observer: spawns the 3D entity tree when a fixture is added to the patch.
+#[allow(clippy::too_many_arguments)]
 pub fn on_fixture_spawned(
     trigger: On<SpawnFixtureEvent>,
     patch: Res<PatchRes>,
@@ -284,6 +285,8 @@ pub fn articulate_fixtures(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn articulate_beams(
     programmer: Res<Programmer>,
     time: Res<Time>,

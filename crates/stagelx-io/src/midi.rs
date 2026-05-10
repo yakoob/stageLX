@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use midir::MidiInput;
 use stagelx_patch::PatchRes;
-use stagelx_show::{Programmer, ProtocolStatus};
+use stagelx_show::{BackCueEvent, GoCueEvent, Programmer, ProtocolStatus};
 use stagelx_core::types::FixtureId;
 use crate::config::MidiConfig;
 use crate::stats::MidiStats;
@@ -89,7 +89,8 @@ pub struct MidiTarget {
     pub fixture_ids: HashSet<FixtureId>,
 }
 
-/// Drain received CC messages and route to Programmer or per-fixture DMX.
+/// Drain received MIDI messages and route to Programmer, per-fixture DMX, or cue triggers.
+#[allow(clippy::too_many_arguments)]
 pub fn midi_receive(
     state: NonSendMut<MidiState>,
     target: Res<MidiTarget>,
@@ -98,26 +99,41 @@ pub fn midi_receive(
     mut engine: ResMut<DmxEngineRes>,
     cfg: Res<MidiConfig>,
     mut stats: ResMut<MidiStats>,
+    mut commands: Commands,
 ) {
     let mut count = 0u64;
 
     if target.fixture_ids.is_empty() {
-        // ── Global mode: control Programmer ───────────────────────────────────
+        // ── Global mode: control Programmer + cue triggers ────────────────────
         while let Ok(msg) = state.rx.try_recv() {
             let status = msg[0] & 0xF0;
-            if status != 0xB0 { continue; }
-            let cc  = msg[1];
-            let val = msg[2] as f32 / 127.0;
+            match status {
+                0xB0 => {
+                    // Control Change
+                    let cc  = msg[1];
+                    let val = msg[2] as f32 / 127.0;
 
-            if      cc == cfg.cc_dimmer { programmer.dimmer     = val; }
-            else if cc == cfg.cc_pan    { programmer.pan        = val; }
-            else if cc == cfg.cc_tilt   { programmer.tilt       = val; }
-            else if cc == cfg.cc_red    { programmer.color[0]   = val; }
-            else if cc == cfg.cc_green  { programmer.color[1]   = val; }
-            else if cc == cfg.cc_blue   { programmer.color[2]   = val; }
-            else if cc == cfg.cc_zoom   { programmer.zoom       = val; }
-            else if cc == cfg.cc_strobe { programmer.strobe     = val; }
-            count += 1;
+                    if      cc == cfg.cc_dimmer { programmer.dimmer     = val; }
+                    else if cc == cfg.cc_pan    { programmer.pan        = val; }
+                    else if cc == cfg.cc_tilt   { programmer.tilt       = val; }
+                    else if cc == cfg.cc_red    { programmer.color[0]   = val; }
+                    else if cc == cfg.cc_green  { programmer.color[1]   = val; }
+                    else if cc == cfg.cc_blue   { programmer.color[2]   = val; }
+                    else if cc == cfg.cc_zoom   { programmer.zoom       = val; }
+                    else if cc == cfg.cc_strobe { programmer.strobe     = val; }
+                    count += 1;
+                }
+                0x90 if msg[2] > 0 => {
+                    // Note On (velocity > 0)
+                    let note = msg[1];
+                    if Some(note) == cfg.note_go {
+                        commands.trigger(GoCueEvent);
+                    } else if Some(note) == cfg.note_back {
+                        commands.trigger(BackCueEvent);
+                    }
+                }
+                _ => {}
+            }
         }
     } else {
         // ── Per-fixture mode: write to DMX engine ─────────────────────────────

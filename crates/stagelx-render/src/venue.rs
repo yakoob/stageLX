@@ -300,8 +300,10 @@ fn spawn_fbx_meshes(
     meshes: &mut Assets<Mesh>,
     mat: &Handle<StandardMaterial>,
 ) -> Result<usize, String> {
-    let mut opts = ufbx::LoadOpts::default();
-    opts.generate_missing_normals = true;
+    let opts = ufbx::LoadOpts {
+        generate_missing_normals: true,
+        ..Default::default()
+    };
 
     let scene = ufbx::load_file(path, opts)
         .map_err(|e| format!("FBX load error: {} — {}", e.description, e.info()))?;

@@ -58,7 +58,7 @@ pub fn setup_scene(
 ) {
     let (w, h, sf) = windows
         .single()
-        .map(|win| (win.physical_width(), win.physical_height(), win.scale_factor() as f32))
+        .map(|win| (win.physical_width(), win.physical_height(), win.scale_factor()))
         .unwrap_or((1440, 900, 2.0));
 
     let (foh_vp, top_vp, side_vp) = compute_viewports(w, h, sf);
@@ -145,6 +145,7 @@ pub fn setup_scene(
     });
 }
 
+#[allow(clippy::type_complexity)]
 pub fn update_viewports_on_resize(
     mut resize_events: MessageReader<WindowResized>,
     windows: Query<&Window>,
@@ -168,7 +169,7 @@ pub fn update_viewports_on_resize(
     if w == 0 || h == 0 {
         return;
     }
-    let sf = window.scale_factor() as f32;
+    let sf = window.scale_factor();
     let (foh_vp, top_vp, side_vp) = compute_viewports(w, h, sf);
 
     for (mut cam, foh, top, side) in &mut cameras {

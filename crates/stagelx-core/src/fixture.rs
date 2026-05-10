@@ -13,6 +13,9 @@ pub struct DmxChannelMap {
     pub red: Option<u16>,
     pub green: Option<u16>,
     pub blue: Option<u16>,
+    pub gobo: Option<u16>,
+    pub gobo_rotation: Option<u16>,
+    pub color_wheel: Option<u16>,
 }
 
 /// A patched fixture instance in the show.

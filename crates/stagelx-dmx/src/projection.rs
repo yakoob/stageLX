@@ -28,6 +28,8 @@ pub fn programmer_to_dmx(
     let r = (programmer.color[0] * 255.0) as u8;
     let g = (programmer.color[1] * 255.0) as u8;
     let b = (programmer.color[2] * 255.0) as u8;
+    let gobo_byte = (programmer.gobo_index as f32 * 32.0).clamp(0.0, 255.0) as u8;
+    let gobo_spin_byte = (programmer.gobo_spin.clamp(0.0, 1.0) * 255.0) as u8;
 
     for inst in patch.0.fixtures() {
         let base = inst.address.channel;
@@ -63,6 +65,12 @@ pub fn programmer_to_dmx(
             }
             if let Some(off) = inst.channel_map.blue {
                 buf.set(base + off, b);
+            }
+            if let Some(off) = inst.channel_map.gobo {
+                buf.set(base + off, gobo_byte);
+            }
+            if let Some(off) = inst.channel_map.gobo_rotation {
+                buf.set(base + off, gobo_spin_byte);
             }
         } else {
             // Generic 8-ch: Dimmer | Pan MSB | Pan Fine | Tilt MSB | Tilt Fine | R | G | B

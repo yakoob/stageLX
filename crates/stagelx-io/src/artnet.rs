@@ -274,7 +274,7 @@ pub fn artnet_manage_socket(
     // ── Create socket if missing ──────────────────────────────────────────────
     if state.socket.is_none() {
         let now = std::time::Instant::now();
-        let should_try = state.last_bind_attempt.map_or(true, |t| {
+        let should_try = state.last_bind_attempt.is_none_or(|t| {
             now.duration_since(t).as_secs_f32() >= 1.0
         });
         if should_try {
@@ -354,7 +354,7 @@ pub fn artnet_manage_socket(
     // ── Send ArtPoll every 3 s when discovery enabled ─────────────────────────
     if cfg.discovery_enabled {
         let now = std::time::Instant::now();
-        let should_poll = state.last_poll_sent.map_or(true, |t| {
+        let should_poll = state.last_poll_sent.is_none_or(|t| {
             now.duration_since(t).as_secs_f32() >= ART_POLL_INTERVAL_SECS
         });
         if should_poll {

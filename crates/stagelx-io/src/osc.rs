@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use stagelx_patch::PatchRes;
-use stagelx_show::ProtocolStatus;
+use stagelx_show::{BackCueEvent, GoCueEvent, ProtocolStatus};
 use stagelx_core::types::FixtureId;
 use stagelx_dmx::engine::DmxEngineRes;
 use stagelx_dmx::merge::MergeStrategy;
@@ -180,15 +180,20 @@ pub fn osc_manage_socket(
     }
 }
 
-/// Drain received OSC messages and route per-fixture through the DMX engine.
+/// Drain received OSC messages and route per-fixture through the DMX engine
+/// or emit cue trigger events.
 ///
-/// Address schema: `/fixture/{id}/{attr}` with a single f32 arg (0.0–1.0).
-/// Special `color` attr accepts three f32 args for RGB.
+/// Address schema:
+///   /fixture/{id}/{attr}   f32   — set attribute 0.0–1.0
+///   /fixture/{id}/color    fff   — set RGB 0.0–1.0
+///   /cue/go                     — trigger cue GO
+///   /cue/back                   — trigger cue BACK
 pub fn osc_receive(
     state: Res<OscState>,
     patch: Res<PatchRes>,
     mut engine: ResMut<DmxEngineRes>,
     mut stats: ResMut<OscStats>,
+    mut commands: Commands,
 ) {
     let source = engine
         .0
@@ -197,6 +202,22 @@ pub fn osc_receive(
     let mut count = 0u64;
     while let Ok(msg) = state.rx.try_recv() {
         let parts: Vec<&str> = msg.addr.trim_start_matches('/').split('/').collect();
+
+        // ── Cue triggers ──────────────────────────────────────────────────────
+        if parts.first() == Some(&"cue") {
+            match parts.get(1).copied() {
+                Some("go") => {
+                    commands.trigger(GoCueEvent);
+                }
+                Some("back") => {
+                    commands.trigger(BackCueEvent);
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        // ── Fixture control ───────────────────────────────────────────────────
         if parts.len() < 3 || parts[0] != "fixture" {
             continue;
         }

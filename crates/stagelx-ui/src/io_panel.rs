@@ -14,6 +14,7 @@ use stagelx_show::ProtocolStatus;
 // DMX I/O Panel (docked / inline)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+#[allow(clippy::too_many_arguments)]
 pub fn io_panel_docked(
     ui: &mut Ui,
     artnet_cfg: &mut ArtNetConfig,
@@ -312,6 +313,37 @@ fn midi_config(ui: &mut Ui, cfg: &mut MidiConfig, target: &MidiTarget) {
             col.add_space(4.0);
         }
     });
+
+    ui.add_space(4.0);
+    widgets::eyebrow_widget(ui, "Note Triggers");
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("GO").size(11.0).color(FG_SECONDARY));
+        let mut go_enabled = cfg.note_go.is_some();
+        ui.checkbox(&mut go_enabled, "");
+        if go_enabled {
+            let mut note = cfg.note_go.unwrap_or(60);
+            ui.add(egui::DragValue::new(&mut note).range(0_u8..=127_u8));
+            cfg.note_go = Some(note);
+        } else {
+            cfg.note_go = None;
+            ui.label(RichText::new("—").size(11.0).color(FG_FAINT));
+        }
+
+        ui.add_space(12.0);
+
+        ui.label(RichText::new("BACK").size(11.0).color(FG_SECONDARY));
+        let mut back_enabled = cfg.note_back.is_some();
+        ui.checkbox(&mut back_enabled, "");
+        if back_enabled {
+            let mut note = cfg.note_back.unwrap_or(61);
+            ui.add(egui::DragValue::new(&mut note).range(0_u8..=127_u8));
+            cfg.note_back = Some(note);
+        } else {
+            cfg.note_back = None;
+            ui.label(RichText::new("—").size(11.0).color(FG_FAINT));
+        }
+    });
 }
 
 fn osc_config(ui: &mut Ui, cfg: &mut OscConfig) {
@@ -325,8 +357,12 @@ fn osc_config(ui: &mut Ui, cfg: &mut OscConfig) {
     });
 
     widgets::card(ui, |ui| {
-        widgets::eyebrow_widget(ui, "Address Pattern");
+        widgets::eyebrow_widget(ui, "Address Patterns");
         ui.label(RichText::new("/fixture/{id}/{attr}").size(11.0).monospace().color(ACCENT));
         ui.label(RichText::new("f32 · 0.0–1.0 normalised").size(9.0).monospace().color(FG_MUTED));
+        ui.add_space(4.0);
+        ui.label(RichText::new("/cue/go").size(11.0).monospace().color(ACCENT));
+        ui.label(RichText::new("/cue/back").size(11.0).monospace().color(ACCENT));
+        ui.label(RichText::new("trigger cue playback").size(9.0).monospace().color(FG_MUTED));
     });
 }

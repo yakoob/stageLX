@@ -153,6 +153,7 @@ pub fn setup_beam_lod(
 
 // ─── System: sync beam camera + composite quad to FOH camera ──────────────────
 
+#[allow(clippy::type_complexity)]
 pub fn sync_beam_camera_to_foh(
     foh_q: Query<&Transform, With<FohCamera>>,
     mut beam_cam_q: Query<&mut Transform, (With<BeamHalfResCamera>, Without<FohCamera>)>,
@@ -314,6 +315,8 @@ pub fn evaluate_beam_lod(
 
 // ─── System: apply LOD tier (visibility, render layers, step count) ───────────
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn apply_beam_lod(
     mut beam_cones: Query<
         (Entity, &BeamCone, &BeamLodTier, &mut Visibility, &MeshMaterial3d<BeamMaterial>),

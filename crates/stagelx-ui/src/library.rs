@@ -245,7 +245,7 @@ fn mvr_tab(
                 if fixtures.is_empty() {
                     export_status = Some("No fixtures in patch to export.".into());
                 } else {
-                    let fixture_refs: Vec<_> = fixtures.iter().copied().collect();
+                    let fixture_refs: Vec<_> = fixtures.to_vec();
                     match export_mvr(&fixture_refs, |id| res.library.raw_bytes(id).map(|b| b.to_vec()), "stageLX Export") {
                         Ok(bytes) => {
                             match std::fs::write(&path, &bytes) {

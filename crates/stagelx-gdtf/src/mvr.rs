@@ -261,34 +261,32 @@ fn parse_scene_xml(xml: &str) -> Result<ParsedElements, GdtfError> {
                 }
             }
 
-            Ok(XmlEvent::Text(ref e)) => {
-                if !matches!(active, ActiveElement::None) {
-                    let text = e.unescape().map(|s| s.into_owned()).unwrap_or_default();
-                    match &mut active {
-                        ActiveElement::Fixture(data) => {
-                            match target {
-                                TextTarget::GdtfSpec      => data.gdtf_spec       = text,
-                                TextTarget::GdtfMode      => data.gdtf_mode       = text,
-                                TextTarget::FixtureTypeId => data.fixture_type_id = text,
-                                TextTarget::Matrix        => data.matrix_str      = text,
-                                TextTarget::Address       => data.address_str     = text,
-                                TextTarget::None          => {}
-                            }
+            Ok(XmlEvent::Text(ref e))
+                if !matches!(active, ActiveElement::None) =>
+            {
+                let text = e.unescape().map(|s| s.into_owned()).unwrap_or_default();
+                match &mut active {
+                    ActiveElement::Fixture(data) => {
+                        match target {
+                            TextTarget::GdtfSpec      => data.gdtf_spec       = text,
+                            TextTarget::GdtfMode      => data.gdtf_mode       = text,
+                            TextTarget::FixtureTypeId => data.fixture_type_id = text,
+                            TextTarget::Matrix        => data.matrix_str      = text,
+                            TextTarget::Address       => data.address_str     = text,
+                            TextTarget::None          => {}
                         }
-                        ActiveElement::SceneObject(data) => {
-                            match target {
-                                TextTarget::Matrix => data.matrix_str = text,
-                                _ => {}
-                            }
-                        }
-                        ActiveElement::Truss(data) => {
-                            match target {
-                                TextTarget::Matrix => data.matrix_str = text,
-                                _ => {}
-                            }
-                        }
-                        ActiveElement::None => {}
                     }
+                    ActiveElement::SceneObject(data) => {
+                        if matches!(target, TextTarget::Matrix) {
+                            data.matrix_str = text;
+                        }
+                    }
+                    ActiveElement::Truss(data) => {
+                        if matches!(target, TextTarget::Matrix) {
+                            data.matrix_str = text;
+                        }
+                    }
+                    ActiveElement::None => {}
                 }
             }
 

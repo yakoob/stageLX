@@ -533,7 +533,7 @@ impl<'a> Encoder<'a> {
         self
     }
 
-    pub fn sub(mut self, sub: &'a str) -> Self {
+    pub fn sub_label(mut self, sub: &'a str) -> Self {
         self.sub = Some(sub);
         self
     }

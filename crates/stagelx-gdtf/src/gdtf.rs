@@ -468,6 +468,15 @@ impl GdtfFixtureType {
         if let Some(ch) = mode.channel_for("ColorAdd_B") {
             map.blue = Some(ch.offset.saturating_sub(1));
         }
+        if let Some(ch) = mode.channel_for("Gobo") {
+            map.gobo = Some(ch.offset.saturating_sub(1));
+        }
+        if let Some(ch) = mode.channel_for("GoboRot") {
+            map.gobo_rotation = Some(ch.offset.saturating_sub(1));
+        }
+        if let Some(ch) = mode.channel_for("ColorWheel") {
+            map.color_wheel = Some(ch.offset.saturating_sub(1));
+        }
         map
     }
 }

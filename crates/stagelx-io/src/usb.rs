@@ -58,7 +58,7 @@ impl IoSink for UsbTxSink {
         let mut dev = serialport::new(&port, baud)
             .timeout(Duration::from_millis(100))
             .open()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         Ok(std::thread::spawn(move || {
             loop {
