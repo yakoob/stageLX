@@ -196,7 +196,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let target = if *on { 1.0 } else { 0.0 };
     let dt = ui.ctx().input(|i| i.stable_dt);
     let thumb_pos: f32 = ui.ctx().data_mut(|d| {
-        let current = d.get_temp_mut_or_insert_with(id, || target).clone();
+        let current = *d.get_temp_mut_or_insert_with(id, || target);
         let next = current + (target - current) * dt * 6.67; // ~150ms
         *d.get_temp_mut_or_insert_with(id, || target) = next;
         next

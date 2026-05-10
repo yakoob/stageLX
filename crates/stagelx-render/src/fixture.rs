@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use stagelx_core::types::FixtureId;
-use stagelx_state::{FixtureLibraryRes, PatchRes, Programmer, SpawnFixtureEvent, DespawnFixtureEvent};
+use stagelx_patch::{PatchRes, SpawnFixtureEvent, DespawnFixtureEvent};
+use stagelx_show::{FixtureLibraryRes, Programmer};
 use crate::beam::{BeamMaterial, GoboLibrary, build_beam_cone};
 use crate::beam_sprite::{BeamSprite, BeamSpriteTop, BeamSpriteMaterial, build_beam_sprite_quad};
 
@@ -81,7 +82,7 @@ pub fn on_fixture_spawned(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
     mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
-    mut perf: Option<ResMut<stagelx_state::PerfDiagnosticsRes>>,
+    mut perf: Option<ResMut<stagelx_show::PerfDiagnosticsRes>>,
 ) {
     let start = std::time::Instant::now();
     let id = trigger.event().0;

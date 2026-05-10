@@ -1,33 +1,15 @@
-//! Shared Bevy Resources and Events for stageLX.
+//! Show-level Bevy Resources and Events for stageLX.
 //!
-//! Lives in its own crate so that stagelx-render, stagelx-io, and stagelx-ui
-//! can all depend on the resource *types* without any of them depending on
-//! each other.
-//!
-//! # FROZEN — do not add new Resources here
-//!
-//! New state belongs in its owning crate:
-//! - MIDI / OSC config → `stagelx-io`
-//! - Viewport layout → `stagelx-render`
-//! - Export staging → `stagelx-export` (future)
-//!
-//! Phase 6 will extract `Programmer` → `stagelx-show` and `PatchRes` → `stagelx-patch`.
+//! Contains programmer state, performance diagnostics, cue data,
+//! and venue-loading events.
 
 use bevy::prelude::*;
-use stagelx_core::{patch::Patch, types::FixtureId};
 use stagelx_gdtf::FixtureLibrary;
 
+pub mod cue;
+pub use cue::*;
+
 // ─── Events ───────────────────────────────────────────────────────────────────
-
-/// Emitted by the patch UI or MVR importer when a fixture is added to the patch.
-/// The render plugin responds by spawning the 3D scene entity.
-#[derive(Event, Debug, Clone, Copy)]
-pub struct SpawnFixtureEvent(pub FixtureId);
-
-/// Emitted when a fixture is removed from the patch.
-/// The render plugin responds by despawning the corresponding scene entity.
-#[derive(Event, Debug, Clone, Copy)]
-pub struct DespawnFixtureEvent(pub FixtureId);
 
 /// Emitted by the Library UI when the user loads a venue file.
 /// The render plugin observes this and calls the actual mesh loader,
@@ -76,25 +58,6 @@ impl Default for Programmer {
             gobo_spin: 0.0,
         }
     }
-}
-
-// ─── PatchRes ─────────────────────────────────────────────────────────────────
-
-/// Bevy Resource wrapping the show patch (fixture → DMX address mapping).
-#[derive(Resource, Default)]
-pub struct PatchRes(pub Patch);
-
-// ─── PatchEditState ───────────────────────────────────────────────────────────
-
-/// Transient state for the patch panel "Add Fixture" form.
-#[derive(Resource, Default)]
-pub struct PatchEditState {
-    pub selected_type_id: String,
-    pub selected_mode:    String,
-    pub new_name:         String,
-    pub universe_str:     String,
-    pub channel_str:      String,
-    pub add_error:        Option<String>,
 }
 
 // ─── FixtureLibraryRes ────────────────────────────────────────────────────────

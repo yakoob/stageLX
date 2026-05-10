@@ -1,9 +1,8 @@
 [package]
-name    = "stagelx-state"
+name    = "stagelx-patch"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 stagelx-core = { workspace = true }
-stagelx-gdtf = { workspace = true }
 bevy         = { workspace = true }

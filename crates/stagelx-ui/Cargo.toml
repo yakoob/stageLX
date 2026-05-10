@@ -6,7 +6,8 @@ edition = "2021"
 [dependencies]
 stagelx-core   = { workspace = true }
 stagelx-gdtf   = { workspace = true }
-stagelx-state  = { workspace = true }
+stagelx-patch  = { workspace = true }
+stagelx-show   = { workspace = true }
 stagelx-io     = { workspace = true }
 stagelx-render = { workspace = true }
 bevy           = { workspace = true }

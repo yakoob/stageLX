@@ -4,3 +4,4 @@ Cargo.lock
 *.mvr
 .DS_Store
 *.zip
+show.json

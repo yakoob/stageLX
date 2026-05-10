@@ -7,53 +7,141 @@
 //!   0x7E  label  len_lsb  len_msb  start_code  dmx[0..512]  0xE7
 //!
 //! Total frame = 518 bytes; baud-rate gives ≈ 22 ms/frame ≈ 45 Hz max.
+//!
+//! TX runs in a background thread (IoSink) so the 16–22 ms serial write does
+//! not stall Bevy's FixedUpdate tick.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
 use bevy::prelude::*;
-use serialport::SerialPort;
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::ProtocolStatus;
+use stagelx_show::ProtocolStatus;
 use crate::config::UsbConfig;
 use crate::stats::UsbStats;
+use crate::supervisor::{IoSink, IoSupervisor};
 
 pub const ENTTEC_BAUD: u32 = 250_000;
 const LABEL_OUTPUT_DMX: u8 = 6;
 const DMX_PAYLOAD: u16 = 513; // null start code + 512 channels
 
-// ─── Non-send resource ────────────────────────────────────────────────────────
-// SerialPort is Send but not Sync, so we register UsbDmxState as a NonSend
-// resource (main-thread only) rather than a thread-safe Resource.
+// ─── TX Command ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone)]
+pub struct UsbTxCmd {
+    pub data: [u8; 512],
+}
+
+// ─── IoSink implementation ────────────────────────────────────────────────────
+
+pub struct UsbTxSink {
+    port: String,
+    baud: u32,
+}
+
+impl UsbTxSink {
+    pub fn new(port: String, baud: u32) -> Self {
+        Self { port, baud }
+    }
+}
+
+impl IoSink for UsbTxSink {
+    type Cmd = UsbTxCmd;
+
+    fn start(&self, rx: Receiver<Self::Cmd>, shutdown: Receiver<()>) -> std::io::Result<JoinHandle<()>> {
+        let port = self.port.clone();
+        let baud = self.baud;
+
+        let mut dev = serialport::new(&port, baud)
+            .timeout(Duration::from_millis(100))
+            .open()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+        Ok(std::thread::spawn(move || {
+            loop {
+                crossbeam_channel::select! {
+                    recv(rx) -> cmd => {
+                        match cmd {
+                            Ok(cmd) => {
+                                let frame = build_enttec_frame(&cmd.data);
+                                if let Err(e) = dev.write_all(&frame) {
+                                    warn!("USB DMX write error: {e}");
+                                    // Try to re-open the device once.
+                                    if let Ok(d) = serialport::new(&port, baud)
+                                        .timeout(Duration::from_millis(100))
+                                        .open()
+                                    {
+                                        dev = d;
+                                    }
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    recv(shutdown) -> _ => break,
+                }
+            }
+        }))
+    }
+}
+
+// ─── Resource ─────────────────────────────────────────────────────────────────
+
+/// USB state is now Send-safe because the SerialPort lives in the background thread.
+#[derive(Resource)]
 pub struct UsbDmxState {
-    pub device: Option<Box<dyn SerialPort>>,
+    pub tx_chan: Option<Sender<UsbTxCmd>>,
+    tx_shutdown: Option<Sender<()>>,
+    tx_handle: Option<JoinHandle<()>>,
+    pub tx_drops: Arc<AtomicU64>,
+    /// Last port path we successfully opened (for re-open logic).
+    last_port: String,
 }
 
 impl Default for UsbDmxState {
     fn default() -> Self {
-        Self { device: None }
+        Self {
+            tx_chan: None,
+            tx_shutdown: None,
+            tx_handle: None,
+            tx_drops: Arc::new(AtomicU64::new(0)),
+            last_port: String::new(),
+        }
     }
 }
 
 // ─── Systems ──────────────────────────────────────────────────────────────────
 
-/// Open or close the USB serial device based on `IoConfig.usb_tx_enabled`.
+/// Open or close the USB serial device based on `UsbConfig`.
 /// Runs in `Update` so it can respond quickly to config changes.
-pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, cfg: ResMut<UsbConfig>, mut stats: ResMut<UsbStats>) {
+pub fn usb_manage_device(
+    mut state: ResMut<UsbDmxState>,
+    cfg: ResMut<UsbConfig>,
+    mut stats: ResMut<UsbStats>,
+    supervisor: Res<IoSupervisor>,
+) {
     let port = cfg.port.trim();
 
-    if cfg.tx_enabled && state.device.is_none() {
+    // ── Start TX thread when enabled ──────────────────────────────────────────
+    if cfg.tx_enabled && state.tx_chan.is_none() {
         if port.is_empty() {
             stats.status = ProtocolStatus::Warn;
             return;
         }
-        match serialport::new(port, ENTTEC_BAUD)
-            .timeout(std::time::Duration::from_millis(10))
-            .open()
-        {
-            Ok(dev) => {
-                info!("USB DMX opened: {}", port);
+        let (tx, rx) = bounded::<UsbTxCmd>(1);
+        let (shutdown_tx, shutdown_rx) = bounded::<()>(1);
+        let sink = UsbTxSink::new(port.to_string(), ENTTEC_BAUD);
+        match sink.start(rx, shutdown_rx) {
+            Ok(handle) => {
+                info!("USB DMX TX thread started: {}", port);
                 stats.status = ProtocolStatus::Live;
-                state.device = Some(dev);
+                state.tx_chan = Some(tx);
+                state.tx_shutdown = Some(shutdown_tx);
+                state.tx_handle = Some(handle);
+                state.last_port = port.to_string();
             }
             Err(_e) => {
                 stats.status = ProtocolStatus::Error;
@@ -61,17 +149,29 @@ pub fn usb_manage_device(mut state: NonSendMut<UsbDmxState>, cfg: ResMut<UsbConf
         }
     }
 
-    if !cfg.tx_enabled && state.device.is_some() {
-        state.device = None;
+    // ── Stop TX thread when disabled ──────────────────────────────────────────
+    if !cfg.tx_enabled && state.tx_chan.is_some() {
+        if let Some(shutdown) = state.tx_shutdown.take() {
+            let _ = shutdown.try_send(());
+        }
+        state.tx_chan = None;
+        state.tx_handle = None;
         stats.status = ProtocolStatus::Idle;
-        info!("USB DMX closed");
+        info!("USB DMX TX thread stopped");
+    }
+
+    // ── Sync tx_drops into supervisor ─────────────────────────────────────────
+    let local_drops = state.tx_drops.load(Ordering::Relaxed);
+    let global = supervisor.tx_drops.load(Ordering::Relaxed);
+    if local_drops > global {
+        supervisor.tx_drops.store(local_drops, Ordering::Relaxed);
     }
 }
 
 /// Send a DMX frame over the Enttec USB Pro device.
-/// Runs in `FixedUpdate` at 44 Hz alongside Art-Net / sACN output.
+/// Runs in `FixedUpdate` at 44 Hz — queues a command for the TX background thread.
 pub fn usb_send(
-    mut state: NonSendMut<UsbDmxState>,
+    state: Res<UsbDmxState>,
     engine: Res<DmxEngineRes>,
     cfg: Res<UsbConfig>,
     mut stats: ResMut<UsbStats>,
@@ -79,20 +179,21 @@ pub fn usb_send(
     if !cfg.tx_enabled {
         return;
     }
-    let Some(ref mut dev) = state.device else { return };
+    let Some(tx) = &state.tx_chan else { return };
 
     let universe = cfg.universe;
     if let Some(dmx_buf) = engine.0.output_buffer(universe) {
-        let frame = build_enttec_frame(dmx_buf.as_bytes());
-        match dev.write_all(&frame) {
-            Ok(()) => {
+        let cmd = UsbTxCmd {
+            data: *dmx_buf.as_bytes(),
+        };
+        match tx.try_send(cmd) {
+            Ok(_) => {
                 stats.tx_count = stats.tx_count.saturating_add(1);
                 stats.status = ProtocolStatus::Live;
             }
-            Err(_e) => {
+            Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => {
                 stats.status = ProtocolStatus::Error;
-                // Drop the device; usb_manage_device will try to re-open it.
-                state.device = None;
             }
         }
     }

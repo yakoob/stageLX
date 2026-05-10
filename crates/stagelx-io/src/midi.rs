@@ -7,7 +7,8 @@
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender};
 use midir::MidiInput;
-use stagelx_state::{PatchRes, Programmer, ProtocolStatus};
+use stagelx_patch::PatchRes;
+use stagelx_show::{Programmer, ProtocolStatus};
 use stagelx_core::types::FixtureId;
 use crate::config::MidiConfig;
 use crate::stats::MidiStats;

@@ -4,7 +4,7 @@ use bevy_egui::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Stroke
 use crate::theme::*;
 use crate::widgets;
 use crate::{PatchRes, PatchSelection};
-use stagelx_state::Programmer;
+use stagelx_show::Programmer;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Programmer Panel (docked / inline)
@@ -202,7 +202,7 @@ pub fn programmer_panel_docked(
             painter.text(
                 Pos2::new(rect.min.x + 38.0, rect.center().y + 8.0),
                 egui::Align2::LEFT_CENTER,
-                &format!("#{:02X}{:02X}{:02X}", (r*255.0) as u8, (g*255.0) as u8, (b*255.0) as u8),
+                format!("#{:02X}{:02X}{:02X}", (r*255.0) as u8, (g*255.0) as u8, (b*255.0) as u8),
                 font_hint(),
                 FG_MUTED,
             );

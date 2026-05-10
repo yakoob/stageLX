@@ -14,7 +14,8 @@ use stagelx_core::{
     fixture::FixtureInstance,
     types::{DmxAddress, FixtureId},
 };
-use stagelx_state::{FixtureLibraryRes, LoadVenueEvent, PatchRes, PerfDiagnosticsRes, VenueLoadState};
+use stagelx_patch::PatchRes;
+use stagelx_show::{FixtureLibraryRes, LoadVenueEvent, PerfDiagnosticsRes, VenueLoadState};
 use beam::{BeamMaterial, GoboLibrary, setup_gobos};
 use beam_sprite::BeamSpriteMaterial;
 use camera::{foh_camera_input, foh_camera_update};

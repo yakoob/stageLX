@@ -10,19 +10,19 @@
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicU64, Ordering},
     sync::Arc,
+    thread::JoinHandle,
     time::Duration,
 };
 
 use bevy::prelude::*;
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use stagelx_dmx::engine::DmxEngineRes;
-use stagelx_state::ProtocolStatus;
+use stagelx_show::ProtocolStatus;
 use crate::config::SacnConfig;
 use crate::stats::SacnStats;
-
-use crate::supervisor::IoSupervisor;
+use crate::supervisor::{IoSink, IoSource, IoSupervisor, create_tuned_udp_socket};
 
 pub const SACN_PORT: u16 = 5568;
 const MAX_RX_UNIVERSES: usize = 64;
@@ -95,11 +95,11 @@ pub fn parse_sacn(buf: &[u8]) -> Option<(u16, u8, &[u8])> {
         return None;
     }
     // Root vector must be VECTOR_ROOT_E131_DATA
-    if &buf[0x12..0x16] != &[0x00, 0x00, 0x00, 0x04] {
+    if buf[0x12..0x16] != [0x00, 0x00, 0x00, 0x04] {
         return None;
     }
     // Framing vector must be VECTOR_E131_DATA_PACKET
-    if &buf[0x28..0x2C] != &[0x00, 0x00, 0x00, 0x02] {
+    if buf[0x28..0x2C] != [0x00, 0x00, 0x00, 0x02] {
         return None;
     }
     // DMP vector
@@ -124,6 +124,15 @@ pub fn multicast_addr(universe: u16) -> Ipv4Addr {
     Ipv4Addr::new(239, 255, (universe >> 8) as u8, (universe & 0xFF) as u8)
 }
 
+fn join_sacn_multicast(socket: &UdpSocket, universe: u16) -> std::io::Result<()> {
+    let s2 = socket2::Socket::from(socket.try_clone()?);
+    let multiaddr = multicast_addr(universe);
+    let interface = Ipv4Addr::UNSPECIFIED;
+    s2.join_multicast_v4(&multiaddr, &interface)?;
+    info!("sACN joined multicast group {} for universe {}", multiaddr, universe);
+    Ok(())
+}
+
 // ─── Received sACN packet ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -135,18 +144,125 @@ pub struct ReceivedSacnPacket {
     pub data: [u8; 512],
 }
 
+// ─── TX Command ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct SacnTxCmd {
+    pub universe: u16,
+    pub priority: u8,
+    pub sequence: u8,
+    pub data: [u8; 512],
+}
+
+// ─── IoSource / IoSink implementations ────────────────────────────────────────
+
+pub struct SacnRxSource {
+    socket: UdpSocket,
+    drops: Arc<AtomicU64>,
+}
+
+impl SacnRxSource {
+    pub fn new(socket: UdpSocket, drops: Arc<AtomicU64>) -> Self {
+        Self { socket, drops }
+    }
+}
+
+impl IoSource for SacnRxSource {
+    type Msg = ReceivedSacnPacket;
+
+    fn start(&self, tx: Sender<Self::Msg>, shutdown: Receiver<()>) -> std::io::Result<JoinHandle<()>> {
+        let socket = self.socket.try_clone()?;
+        socket.set_nonblocking(false)?;
+        socket.set_read_timeout(Some(Duration::from_millis(100)))?;
+        let drops = Arc::clone(&self.drops);
+
+        Ok(std::thread::spawn(move || {
+            let mut buf = [0u8; 700];
+            loop {
+                match socket.recv_from(&mut buf) {
+                    Ok((n, src)) => {
+                        if let Some((universe, priority, data)) = parse_sacn(&buf[..n]) {
+                            let mut pkt_data = [0u8; 512];
+                            let len = data.len().min(512);
+                            pkt_data[..len].copy_from_slice(&data[..len]);
+                            let pkt = ReceivedSacnPacket {
+                                universe,
+                                priority,
+                                source: src.ip(),
+                                data: pkt_data,
+                            };
+                            if let Err(TrySendError::Full(_)) = tx.try_send(pkt) {
+                                drops.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                        if shutdown.try_recv().is_ok() {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("sACN RX error: {e}");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            }
+        }))
+    }
+}
+
+pub struct SacnTxSink {
+    socket: UdpSocket,
+    dest: SocketAddr,
+}
+
+impl SacnTxSink {
+    pub fn new(socket: UdpSocket, dest: SocketAddr) -> Self {
+        Self { socket, dest }
+    }
+}
+
+impl IoSink for SacnTxSink {
+    type Cmd = SacnTxCmd;
+
+    fn start(&self, rx: Receiver<Self::Cmd>, shutdown: Receiver<()>) -> std::io::Result<JoinHandle<()>> {
+        let socket = self.socket.try_clone()?;
+        let dest = self.dest;
+
+        Ok(std::thread::spawn(move || {
+            loop {
+                crossbeam_channel::select! {
+                    recv(rx) -> cmd => {
+                        match cmd {
+                            Ok(cmd) => {
+                                let pkt = build_sacn(cmd.universe, cmd.priority, cmd.sequence, &cmd.data);
+                                let _ = socket.send_to(&pkt, dest);
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    recv(shutdown) -> _ => break,
+                }
+            }
+        }))
+    }
+}
+
 // ─── Bevy Resource ────────────────────────────────────────────────────────────
 
 #[derive(Resource)]
 pub struct SacnState {
     pub socket: Option<UdpSocket>,
     pub rx_chan: Option<Receiver<ReceivedSacnPacket>>,
-    rx_thread_tx: Option<Sender<ReceivedSacnPacket>>,
-    sequence: u8,
+    pub tx_chan: Option<Sender<SacnTxCmd>>,
+    pub sequence: u8,
     /// Shared drop counter incremented by the RX thread when the channel is full.
     pub rx_drops: Arc<AtomicU64>,
-    /// Signal for the RX background thread to exit.
-    shutdown: Arc<AtomicBool>,
+    /// Shutdown senders for active threads.
+    rx_shutdown: Option<Sender<()>>,
+    tx_shutdown: Option<Sender<()>>,
+    rx_handle: Option<JoinHandle<()>>,
+    tx_handle: Option<JoinHandle<()>>,
     /// Throttle bind retries to avoid log-spam when the port is busy.
     last_bind_attempt: Option<std::time::Instant>,
 }
@@ -156,10 +272,13 @@ impl Default for SacnState {
         Self {
             socket: None,
             rx_chan: None,
-            rx_thread_tx: None,
+            tx_chan: None,
             sequence: 0,
             rx_drops: Arc::new(AtomicU64::new(0)),
-            shutdown: Arc::new(AtomicBool::new(false)),
+            rx_shutdown: None,
+            tx_shutdown: None,
+            rx_handle: None,
+            tx_handle: None,
             last_bind_attempt: None,
         }
     }
@@ -175,6 +294,7 @@ pub fn sacn_manage_socket(
 ) {
     let wants_io = cfg.tx_enabled || cfg.rx_enabled;
 
+    // ── Create socket if missing ──────────────────────────────────────────────
     if wants_io && state.socket.is_none() {
         let now = std::time::Instant::now();
         let should_try = state.last_bind_attempt.map_or(true, |t| {
@@ -183,10 +303,8 @@ pub fn sacn_manage_socket(
         if should_try {
             state.last_bind_attempt = Some(now);
             let bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), SACN_PORT);
-            match UdpSocket::bind(bind_addr) {
+            match create_tuned_udp_socket(bind_addr) {
                 Ok(sock) => {
-                    sock.set_nonblocking(true).ok();
-                    sock.set_broadcast(true).ok();
                     info!("sACN socket bound to {}", bind_addr);
                     state.socket = Some(sock);
                 }
@@ -195,72 +313,95 @@ pub fn sacn_manage_socket(
         }
     }
 
-    if cfg.rx_enabled && state.rx_chan.is_none() {
-        if let Some(ref sock) = state.socket {
-            match sock.try_clone() {
-                Ok(rx_sock) => {
-                    rx_sock.set_nonblocking(false).ok();
-                    rx_sock.set_read_timeout(Some(Duration::from_millis(100))).ok();
-
-                    let (tx, rx) = bounded::<ReceivedSacnPacket>(8);
-                    state.rx_chan = Some(rx);
-                    state.rx_thread_tx = Some(tx.clone());
-                    let drops = state.rx_drops.clone();
-                    let shutdown = Arc::clone(&state.shutdown);
-
-                    std::thread::spawn(move || {
-                        let mut buf = [0u8; 700];
-                        loop {
-                            match rx_sock.recv_from(&mut buf) {
-                                Ok((n, src)) => {
-                                    if let Some((universe, priority, data)) =
-                                        parse_sacn(&buf[..n])
-                                    {
-                                        let mut pkt_data = [0u8; 512];
-                                        let len = data.len().min(512);
-                                        pkt_data[..len].copy_from_slice(&data[..len]);
-                                        let pkt = ReceivedSacnPacket {
-                                            universe,
-                                            priority,
-                                            source: src.ip(),
-                                            data: pkt_data,
-                                        };
-                                        if let Err(TrySendError::Full(_)) = tx.try_send(pkt) {
-                                            drops.fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    }
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                                    if shutdown.load(Ordering::Relaxed) {
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("sACN RX error: {e}");
-                                    std::thread::sleep(Duration::from_millis(10));
-                                }
-                            }
-                        }
-                    });
-                }
-                Err(e) => warn!("sACN RX socket clone failed: {e}"),
+    // ── Multicast join for RX universe ────────────────────────────────────────
+    if cfg.rx_enabled {
+        let rx_uni = if cfg.rx_universe == 0 { cfg.out_universe } else { cfg.rx_universe };
+        if rx_uni > 0 {
+            if let Some(ref sock) = state.socket {
+                let _ = join_sacn_multicast(sock, rx_uni);
             }
         }
     }
 
-    if !cfg.rx_enabled {
-        state.shutdown.store(true, Ordering::Relaxed);
+    // ── Start RX thread when enabled ──────────────────────────────────────────
+    if cfg.rx_enabled && state.rx_chan.is_none() {
+        if let Some(ref sock) = state.socket {
+            let (tx, rx) = bounded::<ReceivedSacnPacket>(8);
+            let (shutdown_tx, shutdown_rx) = bounded::<()>(1);
+            let source = SacnRxSource::new(sock.try_clone().expect("clone"), Arc::clone(&state.rx_drops));
+            match source.start(tx.clone(), shutdown_rx) {
+                Ok(handle) => {
+                    state.rx_chan = Some(rx);
+                    state.rx_shutdown = Some(shutdown_tx);
+                    state.rx_handle = Some(handle);
+                }
+                Err(e) => warn!("sACN RX source start failed: {e}"),
+            }
+        }
+    }
+
+    // ── Stop RX thread when disabled ──────────────────────────────────────────
+    if !cfg.rx_enabled && state.rx_chan.is_some() {
+        if let Some(shutdown) = state.rx_shutdown.take() {
+            let _ = shutdown.try_send(());
+        }
         state.rx_chan = None;
-        state.rx_thread_tx = None;
-        state.shutdown = Arc::new(AtomicBool::new(false));
+        state.rx_handle = None;
     }
 
-    // Release socket when both TX and RX are disabled.
+    // ── Start TX thread when enabled ──────────────────────────────────────────
+    if cfg.tx_enabled && state.socket.is_some() && state.tx_chan.is_none() {
+        let universe = cfg.out_universe;
+        let dest_ip: IpAddr = if cfg.dest_ip.trim().is_empty() {
+            IpAddr::V4(multicast_addr(universe))
+        } else {
+            cfg.dest_ip
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| IpAddr::V4(multicast_addr(universe)))
+        };
+        let dest = SocketAddr::new(dest_ip, SACN_PORT);
+        let (tx, rx) = bounded::<SacnTxCmd>(1);
+        let (shutdown_tx, shutdown_rx) = bounded::<()>(1);
+        let sink = SacnTxSink::new(state.socket.as_ref().unwrap().try_clone().expect("clone"), dest);
+        match sink.start(rx, shutdown_rx) {
+            Ok(handle) => {
+                state.tx_chan = Some(tx);
+                state.tx_shutdown = Some(shutdown_tx);
+                state.tx_handle = Some(handle);
+            }
+            Err(e) => warn!("sACN TX sink start failed: {e}"),
+        }
+    }
+
+    // ── Stop TX thread when disabled ──────────────────────────────────────────
+    if !cfg.tx_enabled && state.tx_chan.is_some() {
+        if let Some(shutdown) = state.tx_shutdown.take() {
+            let _ = shutdown.try_send(());
+        }
+        state.tx_chan = None;
+        state.tx_handle = None;
+    }
+
+    // ── Release socket when both TX and RX are disabled ───────────────────────
     if !wants_io {
-        state.socket = None;
+        if state.socket.is_some() {
+            // Signal both threads before dropping the socket.
+            if let Some(shutdown) = state.rx_shutdown.take() {
+                let _ = shutdown.try_send(());
+            }
+            if let Some(shutdown) = state.tx_shutdown.take() {
+                let _ = shutdown.try_send(());
+            }
+            state.socket = None;
+            state.rx_chan = None;
+            state.tx_chan = None;
+            state.rx_handle = None;
+            state.tx_handle = None;
+        }
     }
 
-    // Sync thread-local drops into the supervisor.
+    // ── Sync thread-local drops into the supervisor ───────────────────────────
     let local_drops = state.rx_drops.load(Ordering::Relaxed);
     let global = supervisor.rx_drops.load(Ordering::Relaxed);
     if local_drops > global {
@@ -276,9 +417,6 @@ pub fn sacn_receive(
 ) {
     let Some(rx) = &state.rx_chan else { return };
 
-    // Use each packet's own priority for the merge source so higher-priority
-    // sACN sources win. For simplicity we use a single fixed source here;
-    // per-CID sources are a future enhancement.
     let source = engine
         .0
         .get_or_add_source("sacn_in", 100, stagelx_dmx::merge::MergeStrategy::Htp);
@@ -303,7 +441,7 @@ pub fn sacn_receive(
 }
 
 /// Send sACN output for the configured universe.
-/// Runs in FixedUpdate — no Instant throttle needed.
+/// Runs in FixedUpdate — queues a command for the TX background thread.
 pub fn sacn_send(
     mut state: ResMut<SacnState>,
     engine: Res<DmxEngineRes>,
@@ -314,38 +452,30 @@ pub fn sacn_send(
         return;
     }
 
-    if state.socket.is_none() {
-        return;
-    }
-
     let universe = cfg.out_universe;
-    if let Some(dmx_buf) = engine.0.output_buffer(universe) {
-        // Capture and advance sequence before borrowing socket.
-        let seq = state.sequence;
-        state.sequence = state.sequence.wrapping_add(1);
+    let Some(dmx_buf) = engine.0.output_buffer(universe) else { return };
 
-        let pkt = build_sacn(universe, cfg.priority, seq, dmx_buf.as_bytes());
+    // Increment sequence before borrowing tx_chan to avoid double-borrow.
+    let seq = state.sequence;
+    state.sequence = state.sequence.wrapping_add(1);
 
-        let dest_ip: IpAddr = if cfg.dest_ip.trim().is_empty() {
-            IpAddr::V4(multicast_addr(universe))
-        } else {
-            cfg.dest_ip
-                .trim()
-                .parse()
-                .unwrap_or_else(|_| IpAddr::V4(multicast_addr(universe)))
+    let Some(tx) = &state.tx_chan else { return };
+
+    let cmd = SacnTxCmd {
+            universe,
+            priority: cfg.priority,
+            sequence: seq,
+            data: *dmx_buf.as_bytes(),
         };
-        let dest = SocketAddr::new(dest_ip, SACN_PORT);
 
-        let sock = state.socket.as_ref().unwrap();
-        match sock.send_to(&pkt, dest) {
+        match tx.try_send(cmd) {
             Ok(_) => {
                 stats.tx_count = stats.tx_count.saturating_add(1);
                 stats.status = ProtocolStatus::Live;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_e) => {
+            Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => {
                 stats.status = ProtocolStatus::Error;
             }
         }
-    }
 }

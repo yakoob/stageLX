@@ -6,10 +6,12 @@ edition = "2021"
 [dependencies]
 stagelx-core      = { workspace = true }
 stagelx-dmx       = { workspace = true }
-stagelx-state     = { workspace = true }
+stagelx-show      = { workspace = true }
+stagelx-patch     = { workspace = true }
 bevy              = { workspace = true }
 thiserror         = { workspace = true }
 crossbeam-channel = { workspace = true }
 serialport        = { workspace = true }
 midir             = { workspace = true }
 rosc              = { workspace = true }
+socket2           = { workspace = true }

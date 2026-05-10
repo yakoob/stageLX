@@ -5,7 +5,7 @@
 //! the IO send/receive systems and the config UI panel.
 
 use bevy::prelude::*;
-use stagelx_state::ProtocolStatus;
+use stagelx_show::ProtocolStatus;
 
 // ─── Art-Net ──────────────────────────────────────────────────────────────────
 

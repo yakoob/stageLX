@@ -1,38 +1,42 @@
-//! Programmer → DMX channel projection.
+//! Cue playback → DMX channel projection.
 //!
-//! Uses pre-computed `DmxChannelMap` on each `FixtureInstance` to avoid
-//! per-tick GDTF string lookups.
+//! Writes the active cue's snapshot into the DMX engine at priority 150
+//! (below programmer=200, above external input=100).
 
 use bevy::prelude::*;
-// FixtureInstance is accessed via PatchRes, no direct import needed.
 use stagelx_patch::PatchRes;
-use stagelx_show::{FixtureLibraryRes, Programmer};
+use stagelx_show::{CuePlayhead, CueStack};
 
-// DmxEngine is accessed via DmxEngineRes, no direct import needed.
+use crate::engine::DmxEngineRes;
+use crate::merge::MergeStrategy;
 
-/// Write normalised programmer state into the DMX engine's "programmer" source.
-/// Runs in FixedUpdate so it fires at the same rate as the protocol sends.
-pub fn programmer_to_dmx(
-    mut engine: ResMut<crate::engine::DmxEngineRes>,
-    programmer: Res<Programmer>,
+/// Write the active cue's snapshot into the DMX engine's "cue_playback" source.
+/// Runs in FixedUpdate alongside programmer_to_dmx.
+pub fn cue_to_dmx(
+    mut engine: ResMut<DmxEngineRes>,
+    stack: Res<CueStack>,
+    playhead: Res<CuePlayhead>,
     patch: Res<PatchRes>,
-    _library: Res<FixtureLibraryRes>,
 ) {
     let source = engine
         .0
-        .get_or_add_source("programmer", 200, crate::merge::MergeStrategy::Ltp);
+        .get_or_add_source("cue_playback", 150, MergeStrategy::Ltp);
 
-    let dimmer_byte = (programmer.dimmer * 255.0) as u8;
-    let pan_raw = (programmer.pan * 65535.0) as u16;
-    let tilt_raw = (programmer.tilt * 65535.0) as u16;
-    let r = (programmer.color[0] * 255.0) as u8;
-    let g = (programmer.color[1] * 255.0) as u8;
-    let b = (programmer.color[2] * 255.0) as u8;
+    let Some(idx) = playhead.current_cue_index else { return };
+    let Some(cue) = stack.cues.get(idx) else { return };
 
-    for inst in patch.0.fixtures() {
+    for (fixture_id, values) in &cue.snapshot {
+        let Some(inst) = patch.0.get(*fixture_id) else { continue };
         let base = inst.address.channel;
         let universe = inst.address.universe;
         let buf = source.universes.get_or_insert(universe);
+
+        let dimmer_byte = (values.dimmer.clamp(0.0, 1.0) * 255.0) as u8;
+        let pan_raw = (values.pan.clamp(0.0, 1.0) * 65535.0) as u16;
+        let tilt_raw = (values.tilt.clamp(0.0, 1.0) * 65535.0) as u16;
+        let r = (values.color[0].clamp(0.0, 1.0) * 255.0) as u8;
+        let g = (values.color[1].clamp(0.0, 1.0) * 255.0) as u8;
+        let b = (values.color[2].clamp(0.0, 1.0) * 255.0) as u8;
 
         // Use pre-computed channel map when available; fall back to generic 8-ch layout.
         let has_map = inst.channel_map.dimmer.is_some()

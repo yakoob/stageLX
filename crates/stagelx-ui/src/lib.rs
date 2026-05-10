@@ -1,3 +1,4 @@
+pub mod cue;
 pub mod io_panel;
 pub mod library;
 pub mod patch;
@@ -10,14 +11,16 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass, egui};
 use bevy_egui::egui::{Color32, Pos2, Rect, RichText, Stroke, StrokeKind, Vec2};
 use std::collections::HashSet;
 
-pub use stagelx_state::{
-    DespawnFixtureEvent, FixtureLibraryRes, LoadVenueEvent, PatchEditState, PatchRes,
-    PerfDiagnosticsRes, Programmer, SpawnFixtureEvent, VenueLoadState,
+pub use stagelx_patch::{DespawnFixtureEvent, PatchEditState, PatchRes, SpawnFixtureEvent};
+pub use stagelx_show::{
+    BackCueEvent, CuePlayhead, CueStack, DeleteCueEvent, FixtureLibraryRes,
+    GoCueEvent, LoadVenueEvent, PerfDiagnosticsRes, Programmer, RecordCueEvent, VenueLoadState,
 };
+use stagelx_io::artnet::ArtNetNodeTable;
 use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
 use stagelx_io::midi::MidiTarget;
 use stagelx_io::stats::{ArtNetStats, MidiStats, OscStats, SacnStats, UsbStats};
-use stagelx_state::ProtocolStatus;
+use stagelx_show::ProtocolStatus;
 
 #[derive(bevy::ecs::system::SystemParam)]
 struct IoStats<'w> {
@@ -26,6 +29,19 @@ struct IoStats<'w> {
     usb: Res<'w, UsbStats>,
     midi: Res<'w, MidiStats>,
     osc: Res<'w, OscStats>,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct UiMutableState<'w> {
+    layout: ResMut<'w, UiLayoutState>,
+    patch_sel: ResMut<'w, PatchSelection>,
+    programmer: ResMut<'w, Programmer>,
+    patch: ResMut<'w, PatchRes>,
+    patch_edit: ResMut<'w, PatchEditState>,
+    library: ResMut<'w, FixtureLibraryRes>,
+    venue: ResMut<'w, VenueLoadState>,
+    app_mode: ResMut<'w, AppMode>,
+    fonts: ResMut<'w, FontsInstalled>,
 }
 use stagelx_core::types::FixtureId;
 
@@ -41,6 +57,7 @@ pub enum PanelKind {
     Patch,
     Library,
     Io,
+    Cue,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -152,6 +169,8 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<PatchRes>()
             .init_resource::<PatchEditState>()
             .init_resource::<FixtureLibraryRes>()
+            .init_resource::<CueStack>()
+            .init_resource::<CuePlayhead>()
             // IO config/stats are initialised by stagelx_io::IoPlugin
             .init_resource::<VenueLoadState>()
             .init_resource::<UiLayoutState>()
@@ -161,10 +180,8 @@ impl Plugin for StageLxUiPlugin {
             .init_resource::<ShowMeta>()
             .init_resource::<RuntimeStats>()
             .init_resource::<FontsInstalled>()
-            .add_systems(
-                EguiPrimaryContextPass,
-                (ui_root_system, io_panel_system).chain(),
-            )
+            .add_systems(EguiPrimaryContextPass, ui_root_system)
+            .add_systems(EguiPrimaryContextPass, io_panel_system)
             .add_systems(Update, sync_midi_target);
     }
 }
@@ -175,6 +192,7 @@ fn io_panel_system(
     mut io_state: ResMut<IoPanelState>,
     mut artnet_cfg: ResMut<ArtNetConfig>,
     artnet_stats: Res<ArtNetStats>,
+    artnet_nodes: Res<ArtNetNodeTable>,
     mut sacn_cfg: ResMut<SacnConfig>,
     sacn_stats: Res<SacnStats>,
     mut usb_cfg: ResMut<UsbConfig>,
@@ -228,6 +246,7 @@ fn io_panel_system(
                         ui,
                         &mut artnet_cfg,
                         &artnet_stats,
+                        &artnet_nodes,
                         &mut sacn_cfg,
                         &sacn_stats,
                         &mut usb_cfg,
@@ -255,6 +274,7 @@ fn io_panel_system(
                     ui,
                     &mut artnet_cfg,
                     &artnet_stats,
+                    &artnet_nodes,
                     &mut sacn_cfg,
                     &sacn_stats,
                     &mut usb_cfg,
@@ -314,24 +334,27 @@ fn install_fonts(ctx: &egui::Context) {
 
 fn ui_root_system(
     mut ctx: bevy_egui::EguiContexts,
-    mut layout: ResMut<UiLayoutState>,
-    mut patch_sel: ResMut<PatchSelection>,
-    mut prog: ResMut<Programmer>,
-    mut patch: ResMut<PatchRes>,
-    mut patch_edit: ResMut<PatchEditState>,
-    mut library: ResMut<FixtureLibraryRes>,
-    mut venue_state: ResMut<VenueLoadState>,
-    mut app_mode: ResMut<AppMode>,
+    mut state: UiMutableState,
+    stack: Res<CueStack>,
+    playhead: Res<CuePlayhead>,
     show_meta: Res<ShowMeta>,
     runtime_stats: Res<RuntimeStats>,
     perf: Res<PerfDiagnosticsRes>,
-    io_stats: IoStats<'_>,
-    mut fonts_installed: ResMut<FontsInstalled>,
+    io_stats: IoStats,
     mut commands: Commands,
     windows: Query<&Window>,
 ) {
+    let layout = &mut *state.layout;
+    let patch_sel = &mut *state.patch_sel;
+    let prog = &mut *state.programmer;
+    let patch = &mut *state.patch;
+    let patch_edit = &mut *state.patch_edit;
+    let library = &mut *state.library;
+    let venue_state = &mut *state.venue;
+    let app_mode = &mut *state.app_mode;
+    let fonts_installed = &mut *state.fonts;
     let Ok(window) = windows.single() else { return };
-    let scale_factor = window.scale_factor() as f32;
+    let scale_factor = window.scale_factor();
     let egui_ctx = ctx.ctx_mut().expect("egui context");
     egui_ctx.set_pixels_per_point(scale_factor);
 
@@ -492,36 +515,70 @@ fn ui_root_system(
             });
     }
 
-    // ── Left rail (Programmer) ────────────────────────────────────────────────
-    if !layout.detached.contains(&PanelKind::Programmer) {
+    // ── Left rail (Cue + Programmer) ──────────────────────────────────────────
+    if !layout.detached.contains(&PanelKind::Programmer) || !layout.detached.contains(&PanelKind::Cue) {
         egui::SidePanel::left("left_rail")
             .exact_width(300.0)
             .frame(egui::Frame::new().fill(BG_CHROME).inner_margin(egui::Margin::same(0)))
             .show(egui_ctx, |ui| {
-                // Rail header
-                ui.horizontal(|ui| {
-                    ui.set_min_size(Vec2::new(0.0, 28.0));
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("Programmer").size(10.0).strong().color(FG_SECONDARY));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::icon_btn_detach(ui).on_hover_text("Detach").clicked() {
-                            layout.detached.insert(PanelKind::Programmer);
-                        }
-                        let is_min = layout.minimized.contains(&PanelKind::Programmer);
-                        if widgets::icon_btn_minimize(ui).on_hover_text(if is_min { "Restore" } else { "Minimize" }).clicked() {
-                            if is_min { layout.minimized.remove(&PanelKind::Programmer); } else { layout.minimized.insert(PanelKind::Programmer); }
-                        }
+                // ── Cue panel ─────────────────────────────────────────────────────
+                if !layout.detached.contains(&PanelKind::Cue) {
+                    ui.horizontal(|ui| {
+                        ui.set_min_size(Vec2::new(0.0, 28.0));
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("Cue").size(10.0).strong().color(FG_SECONDARY));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if widgets::icon_btn_detach(ui).on_hover_text("Detach").clicked() {
+                                layout.detached.insert(PanelKind::Cue);
+                            }
+                            let is_min = layout.minimized.contains(&PanelKind::Cue);
+                            if widgets::icon_btn_minimize(ui).on_hover_text(if is_min { "Restore" } else { "Minimize" }).clicked() {
+                                if is_min { layout.minimized.remove(&PanelKind::Cue); } else { layout.minimized.insert(PanelKind::Cue); }
+                            }
+                        });
                     });
-                });
-                // 1-px hairline border (Tier 1 #7)
-                let p = ui.available_rect_before_wrap();
-                ui.painter().line_segment(
-                    [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
-                    Stroke::new(1.0, BORDER),
-                );
+                    let p = ui.available_rect_before_wrap();
+                    ui.painter().line_segment(
+                        [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                        Stroke::new(1.0, BORDER),
+                    );
+                    if !layout.minimized.contains(&PanelKind::Cue) {
+                        cue::cue_panel_docked(ui, &stack, &playhead, &mut commands);
+                    }
+                    // Divider before Programmer
+                    if !layout.detached.contains(&PanelKind::Programmer) {
+                        let p = ui.available_rect_before_wrap();
+                        ui.painter().line_segment(
+                            [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                            Stroke::new(1.0, BORDER),
+                        );
+                    }
+                }
 
-                if !layout.minimized.contains(&PanelKind::Programmer) {
-                    programmer::programmer_panel_docked(ui, &mut prog, &patch_sel, &patch);
+                // ── Programmer panel ──────────────────────────────────────────────
+                if !layout.detached.contains(&PanelKind::Programmer) {
+                    ui.horizontal(|ui| {
+                        ui.set_min_size(Vec2::new(0.0, 28.0));
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("Programmer").size(10.0).strong().color(FG_SECONDARY));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if widgets::icon_btn_detach(ui).on_hover_text("Detach").clicked() {
+                                layout.detached.insert(PanelKind::Programmer);
+                            }
+                            let is_min = layout.minimized.contains(&PanelKind::Programmer);
+                            if widgets::icon_btn_minimize(ui).on_hover_text(if is_min { "Restore" } else { "Minimize" }).clicked() {
+                                if is_min { layout.minimized.remove(&PanelKind::Programmer); } else { layout.minimized.insert(PanelKind::Programmer); }
+                            }
+                        });
+                    });
+                    let p = ui.available_rect_before_wrap();
+                    ui.painter().line_segment(
+                        [Pos2::new(p.min.x, p.min.y), Pos2::new(p.max.x, p.min.y)],
+                        Stroke::new(1.0, BORDER),
+                    );
+                    if !layout.minimized.contains(&PanelKind::Programmer) {
+                        programmer::programmer_panel_docked(ui, prog, patch_sel, patch);
+                    }
                 }
             });
     }
@@ -669,10 +726,10 @@ fn ui_root_system(
                     if !layout.minimized.contains(&PanelKind::Patch) {
                         patch::patch_panel_docked(
                             ui,
-                            &mut patch,
-                            &library,
-                            &mut patch_edit,
-                            &mut patch_sel,
+                            patch,
+                            library,
+                            patch_edit,
+                            patch_sel,
                             &mut commands,
                         );
                     }
@@ -710,9 +767,9 @@ fn ui_root_system(
                     if !layout.minimized.contains(&PanelKind::Library) {
                         library::library_panel_docked(
                             ui,
-                            &mut library,
-                            &mut patch,
-                            &mut venue_state,
+                            library,
+                            patch,
+                            venue_state,
                             &mut commands,
                         );
                     }
@@ -738,7 +795,7 @@ fn ui_root_system(
             .resizable(true)
             .frame(float_frame)
             .show(egui_ctx, |ui| {
-                programmer::programmer_panel_docked(ui, &mut prog, &patch_sel, &patch);
+                programmer::programmer_panel_docked(ui, prog, patch_sel, patch);
                 if ui.button("Re-dock").clicked() {
                     layout.detached.remove(&PanelKind::Programmer);
                 }
@@ -752,7 +809,7 @@ fn ui_root_system(
             .resizable(true)
             .frame(float_frame)
             .show(egui_ctx, |ui| {
-                patch::patch_panel_docked(ui, &mut patch, &library, &mut patch_edit, &mut patch_sel, &mut commands);
+                patch::patch_panel_docked(ui, patch, library, patch_edit, patch_sel, &mut commands);
                 if ui.button("Re-dock").clicked() {
                     layout.detached.remove(&PanelKind::Patch);
                 }
@@ -766,9 +823,23 @@ fn ui_root_system(
             .resizable(true)
             .frame(float_frame)
             .show(egui_ctx, |ui| {
-                library::library_panel_docked(ui, &mut library, &mut patch, &mut venue_state, &mut commands);
+                library::library_panel_docked(ui, library, patch, venue_state, &mut commands);
                 if ui.button("Re-dock").clicked() {
                     layout.detached.remove(&PanelKind::Library);
+                }
+            });
+    }
+    if layout.detached.contains(&PanelKind::Cue) {
+        egui::Window::new("Cue")
+            .default_pos([100.0, 400.0])
+            .default_width(300.0)
+            .default_height(250.0)
+            .resizable(true)
+            .frame(float_frame)
+            .show(egui_ctx, |ui| {
+                cue::cue_panel_docked(ui, &stack, &playhead, &mut commands);
+                if ui.button("Re-dock").clicked() {
+                    layout.detached.remove(&PanelKind::Cue);
                 }
             });
     }

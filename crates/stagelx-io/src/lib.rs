@@ -10,7 +10,7 @@ pub mod usb;
 
 use bevy::prelude::*;
 use artnet::{
-    ArtNetState,
+    ArtNetState, ArtNetNodeTable,
     artnet_manage_socket, artnet_receive, artnet_send,
     dmx_engine_tick,
 };
@@ -24,7 +24,7 @@ use stats::{
 use usb::{UsbDmxState, usb_manage_device, usb_send};
 use midi::{MidiState, MidiTarget, midi_manage_connection, midi_receive};
 use osc::{OscState, osc_manage_socket, osc_receive};
-use supervisor::IoSupervisor;
+use supervisor::{IoSupervisor, io_supervisor_tick};
 use stagelx_dmx::engine::DmxEngineRes;
 use stagelx_dmx::programmer_to_dmx;
 
@@ -50,10 +50,11 @@ impl Plugin for IoPlugin {
             .init_resource::<OscStats>()
             // Internal transport state
             .init_resource::<ArtNetState>()
+            .init_resource::<ArtNetNodeTable>()
             .init_resource::<SacnState>()
             .init_resource::<OscState>()
+            .init_resource::<UsbDmxState>()
             .init_resource::<IoSupervisor>()
-            .insert_non_send_resource(UsbDmxState::default())
             .insert_non_send_resource(MidiState::default())
             .init_resource::<MidiTarget>()
             .insert_resource(Time::<Fixed>::from_hz(DMX_OUTPUT_HZ))
@@ -70,6 +71,7 @@ impl Plugin for IoPlugin {
                     sacn_receive,
                     osc_receive,
                     midi_receive,
+                    io_supervisor_tick,
                 )
                     .chain(),
             )

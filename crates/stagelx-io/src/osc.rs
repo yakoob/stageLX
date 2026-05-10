@@ -8,84 +8,152 @@
 //! A background thread is used for blocking recv so the main thread is never stalled.
 
 use bevy::prelude::*;
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use rosc::{OscPacket, OscType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
-use stagelx_state::{PatchRes, ProtocolStatus};
+use stagelx_patch::PatchRes;
+use stagelx_show::ProtocolStatus;
 use stagelx_core::types::FixtureId;
 use stagelx_dmx::engine::DmxEngineRes;
 use stagelx_dmx::merge::MergeStrategy;
 use crate::config::OscConfig;
 use crate::stats::OscStats;
+use crate::supervisor::{IoSource, IoSupervisor, create_tuned_udp_socket};
 
 // ─── Incoming message ──────────────────────────────────────────────────────────
 
-struct OscMsg {
-    addr: String,
-    args: Vec<OscType>,
+#[derive(Debug, Clone)]
+pub struct OscMsg {
+    pub addr: String,
+    pub args: Vec<OscType>,
+}
+
+// ─── IoSource implementation ──────────────────────────────────────────────────
+
+pub struct OscRxSource {
+    socket: UdpSocket,
+    drops: Arc<AtomicU64>,
+}
+
+impl OscRxSource {
+    pub fn new(socket: UdpSocket, drops: Arc<AtomicU64>) -> Self {
+        Self { socket, drops }
+    }
+}
+
+impl IoSource for OscRxSource {
+    type Msg = OscMsg;
+
+    fn start(&self, tx: Sender<Self::Msg>, shutdown: Receiver<()>) -> std::io::Result<JoinHandle<()>> {
+        let socket = self.socket.try_clone()?;
+        socket.set_nonblocking(false)?;
+        socket.set_read_timeout(Some(Duration::from_millis(100)))?;
+        let drops = Arc::clone(&self.drops);
+
+        Ok(std::thread::spawn(move || {
+            let mut buf = vec![0u8; 1536];
+            loop {
+                match socket.recv(&mut buf) {
+                    Ok(n) => {
+                        if let Ok(pkt) = rosc::decoder::decode(&buf[..n]) {
+                            forward_packet(pkt, &tx, &drops);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                        if shutdown.try_recv().is_ok() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        }))
+    }
+}
+
+fn forward_packet(pkt: OscPacket, tx: &Sender<OscMsg>, drops: &Arc<AtomicU64>) {
+    match pkt {
+        OscPacket::Message(m) => {
+            if let Err(TrySendError::Full(_)) = tx.try_send(OscMsg { addr: m.addr, args: m.args }) {
+                drops.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        OscPacket::Bundle(b) => {
+            for p in b.content {
+                forward_packet(p, tx, drops);
+            }
+        }
+    }
 }
 
 // ─── Resource ─────────────────────────────────────────────────────────────────
 
 #[derive(Resource)]
 pub struct OscState {
-    rx: Receiver<OscMsg>,
+    pub rx: Receiver<OscMsg>,
     tx: Sender<OscMsg>,
     pub bound_port: Option<u16>,
     /// Clone of the socket held so we can shut it down when disabled.
-    socket: Option<Arc<UdpSocket>>,
-    /// Signal for the background thread to exit.
-    shutdown: Arc<AtomicBool>,
+    socket: Option<UdpSocket>,
+    /// Shared drop counter.
+    pub rx_drops: Arc<AtomicU64>,
+    /// Shutdown sender for the background thread.
+    shutdown: Option<Sender<()>>,
+    /// Background thread handle.
+    handle: Option<JoinHandle<()>>,
 }
 
 impl Default for OscState {
     fn default() -> Self {
         let (tx, rx) = bounded(256);
-        Self { rx, tx, bound_port: None, socket: None, shutdown: Arc::new(AtomicBool::new(false)) }
+        Self {
+            rx,
+            tx,
+            bound_port: None,
+            socket: None,
+            rx_drops: Arc::new(AtomicU64::new(0)),
+            shutdown: None,
+            handle: None,
+        }
     }
 }
 
 // ─── Systems ──────────────────────────────────────────────────────────────────
 
 /// Open / close the UDP socket based on IoConfig.
-pub fn osc_manage_socket(mut state: ResMut<OscState>, cfg: ResMut<OscConfig>, mut stats: ResMut<OscStats>) {
+pub fn osc_manage_socket(
+    mut state: ResMut<OscState>,
+    cfg: ResMut<OscConfig>,
+    mut stats: ResMut<OscStats>,
+    supervisor: Res<IoSupervisor>,
+) {
     let want_open = cfg.enabled;
 
+    // ── Open socket ───────────────────────────────────────────────────────────
     if want_open && state.bound_port.is_none() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), cfg.port);
-        match UdpSocket::bind(addr) {
+        match create_tuned_udp_socket(addr) {
             Ok(sock) => {
-                // Use a short read timeout so the thread can poll the shutdown flag.
-                sock.set_read_timeout(Some(Duration::from_millis(100))).ok();
-                let sock = Arc::new(sock);
-                let tx = state.tx.clone();
-                let thread_sock = Arc::clone(&sock);
-                let shutdown = Arc::clone(&state.shutdown);
-                std::thread::spawn(move || {
-                    let mut buf = vec![0u8; 1536];
-                    loop {
-                        match thread_sock.recv(&mut buf) {
-                            Ok(n) => {
-                                if let Ok(pkt) = rosc::decoder::decode(&buf[..n]) {
-                                    forward_packet(pkt, &tx);
-                                }
-                            }
-                            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                                if shutdown.load(Ordering::Relaxed) {
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        }
+                let (shutdown_tx, shutdown_rx) = bounded::<()>(1);
+                let source = OscRxSource::new(sock.try_clone().expect("clone"), Arc::clone(&state.rx_drops));
+                match source.start(state.tx.clone(), shutdown_rx) {
+                    Ok(handle) => {
+                        info!("OSC listening on {}", addr);
+                        stats.status = ProtocolStatus::Live;
+                        state.bound_port = Some(cfg.port);
+                        state.socket = Some(sock);
+                        state.shutdown = Some(shutdown_tx);
+                        state.handle = Some(handle);
                     }
-                });
-                info!("OSC listening on {}", addr);
-                stats.status = ProtocolStatus::Live;
-                state.bound_port = Some(cfg.port);
-                state.socket = Some(sock);
+                    Err(e) => {
+                        warn!("OSC RX source start failed: {e}");
+                        stats.status = ProtocolStatus::Error;
+                    }
+                }
             }
             Err(_e) => {
                 stats.status = ProtocolStatus::Error;
@@ -93,26 +161,22 @@ pub fn osc_manage_socket(mut state: ResMut<OscState>, cfg: ResMut<OscConfig>, mu
         }
     }
 
+    // ── Close socket ──────────────────────────────────────────────────────────
     if !want_open && state.bound_port.is_some() {
-        // Signal the background thread to exit.
-        state.shutdown.store(true, Ordering::Relaxed);
+        if let Some(shutdown) = state.shutdown.take() {
+            let _ = shutdown.try_send(());
+        }
         state.socket = None;
         state.bound_port = None;
-        state.shutdown = Arc::new(AtomicBool::new(false));
+        state.handle = None;
         stats.status = ProtocolStatus::Idle;
     }
-}
 
-fn forward_packet(pkt: OscPacket, tx: &Sender<OscMsg>) {
-    match pkt {
-        OscPacket::Message(m) => {
-            let _ = tx.try_send(OscMsg { addr: m.addr, args: m.args });
-        }
-        OscPacket::Bundle(b) => {
-            for p in b.content {
-                forward_packet(p, tx);
-            }
-        }
+    // ── Sync drops into supervisor ────────────────────────────────────────────
+    let local_drops = state.rx_drops.load(Ordering::Relaxed);
+    let global = supervisor.rx_drops.load(Ordering::Relaxed);
+    if local_drops > global {
+        supervisor.rx_drops.store(local_drops, Ordering::Relaxed);
     }
 }
 
@@ -132,7 +196,6 @@ pub fn osc_receive(
 
     let mut count = 0u64;
     while let Ok(msg) = state.rx.try_recv() {
-        // Parse /fixture/{id}/{attr}
         let parts: Vec<&str> = msg.addr.trim_start_matches('/').split('/').collect();
         if parts.len() < 3 || parts[0] != "fixture" {
             continue;

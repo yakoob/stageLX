@@ -3,16 +3,44 @@
 A real-time 3D stage lighting visualizer and DMX controller written in Rust.
 Supports GDTF fixture definitions, MVR scene files, and full DMX I/O.
 
+**Version:** 0.2.0-phase6  
+**Last updated:** 2026-05-10
+
 ---
 
-## Goals
+## Table of Contents
 
-- Visualize medium-scale rigs (50–500 fixtures) at 60 fps on desktop hardware
-- Parse GDTF fixture files from [gdtf-share.com](https://gdtf-share.com/) for accurate fixture capabilities and geometry
-- Import and export MVR (My Virtual Rig) scenes for interoperability with MA3, Depence2, etc.
-- Built-in programmer for standalone use, plus live DMX input from external consoles
-- Full DMX output via Art-Net, sACN, and USB dongles (Enttec / DMXking)
-- Accept control input from Art-Net/sACN, MIDI, and OSC
+1. [Executive Summary](#executive-summary)
+2. [Architecture Overview](#architecture-overview)
+3. [Cargo Workspace Structure](#cargo-workspace-structure)
+4. [Key Crate Dependencies](#key-crate-dependencies)
+5. [GDTF Data Model](#gdtf-data-model-key-concepts)
+6. [Rendering Strategy](#rendering-strategy)
+7. [DMX Engine](#dmx-engine)
+8. [I/O Protocol Details](#io-protocol-details)
+9. [Architecture Decision Records](#architecture-decision-records)
+10. [Cue System Architecture](#cue-system-architecture)
+11. [Implementation Phase Archive](#implementation-phase-archive)
+12. [Phase 6 — Production Hardening & Cue Foundation](#phase-6--production-hardening--cue-foundation)
+13. [Open Questions / Decisions Needed](#open-questions--decisions-needed)
+14. [Non-Goals (v1)](#non-goals-v1)
+15. [Repository Setup](#repository-setup)
+16. [Changelog](#changelog)
+
+---
+
+## Executive Summary
+
+stageLX is a desktop application for real-time 3D visualization of stage lighting rigs. It parses GDTF fixture definitions to understand DMX behaviour and 3D geometry, imports MVR scene files for show interoperability, and drives real DMX hardware via Art-Net, sACN, and USB protocols.
+
+**Current state (end of Phase 5):**
+- Workspace of 7 crates with clean dependency graph
+- Full DMX I/O: Art-Net Tx/Rx, sACN Tx/Rx, USB (Enttec), MIDI In, OSC In
+- Volumetric beam rendering with 3-tier LOD and split-screen viewports
+- MVR import/export with real GDTF geometry loading (3DS/OBJ/GLB/FBX venue support)
+- 56 UI audit items resolved; zero compiler warnings
+
+**Phase 6 focus:** Production hardening (test corpus, profiling, protocol completeness), mechanical crate extraction (`stagelx-state` → `stagelx-show` + `stagelx-patch`), and cue-system foundation. Sub-phases 6.1–6.4 are complete.
 
 ---
 
@@ -53,12 +81,13 @@ stageLX/
 │
 ├── crates/
 │   ├── stagelx-core/          # shared types: patch, universe, fixture instance
-│   ├── stagelx-gdtf/          # GDTF + MVR parser
-│   ├── stagelx-dmx/           # DMX frame engine + HTP/LTP merge
-│   ├── stagelx-state/         # shared Bevy Resources (Programmer, PatchRes, IoConfig)
+│   ├── stagelx-patch/         # patch data: PatchRes, PatchEditState, DmxAddress
+│   ├── stagelx-show/          # show state: Programmer, CueStack, events, diagnostics
+│   ├── stagelx-gdtf/          # GDTF + MVR parser + export
+│   ├── stagelx-dmx/           # DMX frame engine + HTP/LTP merge + projection
 │   ├── stagelx-io/            # Art-Net, sACN, USB, MIDI, OSC
-│   ├── stagelx-render/        # Bevy plugin: 3D scene, beams, gobos, fog
-│   └── stagelx-ui/            # egui panels: patch, programmer, scene, I/O
+│   ├── stagelx-render/        # Bevy plugin: 3D scene, beams, gobos, fog, viewports
+│   └── stagelx-ui/            # egui panels: patch, programmer, cue, scene, I/O
 │
 └── src/
     └── main.rs                # Bevy App wiring
@@ -68,27 +97,68 @@ stageLX/
 
 | Crate | Responsibility |
 |---|---|
-| `stagelx-core` | `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`, attribute model |
-| `stagelx-gdtf` | Parse `.gdtf` (ZIP+XML), geometry trees, DMX modes, wheels, physicals |
-| `stagelx-dmx` | DMX frame generation, merge strategies (HTP/LTP), `DmxEngine` |
-| `stagelx-state` | Shared Bevy `Resource`s: `Programmer`, `PatchRes`, `FixtureLibraryRes` (`IoConfig` removed per Rule 22) |
-| `stagelx-io` | Art-Net Tx/Rx, sACN Tx/Rx, USB serial (Enttec), MIDI, OSC |
-| `stagelx-render` | Bevy plugin: volumetric beams, gobo projection, color, fog medium |
-| `stagelx-ui` | egui: patch editor, programmer, fixture library, DMX I/O panel |
+| `stagelx-core` | `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`, `DmxChannelMap`, attribute model |
+| `stagelx-patch` | `PatchRes`, `PatchEditState`, `DmxAddress`, `SpawnFixtureEvent`, `DespawnFixtureEvent` |
+| `stagelx-show` | `Programmer`, `CueStack`, `Cue`, `PerfDiagnosticsRes`, `LoadVenueEvent`, `FixtureLibraryRes` |
+| `stagelx-gdtf` | Parse `.gdtf` (ZIP+XML), geometry trees, DMX modes, wheels, physicals; MVR import/export |
+| `stagelx-dmx` | DMX frame generation, merge strategies (HTP/LTP), `DmxEngine`, programmer→DMX projection, cue→DMX projection |
+| `stagelx-io` | Art-Net Tx/Rx, sACN Tx/Rx, USB serial (Enttec), MIDI, OSC; per-protocol `*Config` + `*Stats` |
+| `stagelx-render` | Bevy plugin: volumetric beams, gobo projection, color, fog medium, split-screen viewports, LOD |
+| `stagelx-ui` | egui: patch editor, programmer, cue panel, fixture library, DMX I/O panel, venue loader |
 
 ### Dependency Graph
 
 ```
-stagelx-core ──────────────────────────────────────────┐
-stagelx-gdtf (→ core) ─────────────────────────────────┤
-stagelx-dmx  (→ core) ─────────────────────────────────┤
-                                                        ▼
-stagelx-state (→ core, gdtf) ──► stagelx-io (→ state, dmx)
-                              ──► stagelx-render (→ state)
-                              ──► stagelx-ui    (→ state)
+                         stagelx-core
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+   stagelx-gdtf          stagelx-dmx          stagelx-patch
+   (→ core)              (→ core)             (→ core)
+        │                     │                     │
+        │                     ▼                     ▼
+        │              stagelx-io (→ dmx)     stagelx-show (→ patch, gdtf)
+        │                     │                     │
+        └─────────────────────┴─────────────────────┘
+                              ▼
+                         stagelx-ui
+              (→ core, gdtf, patch, show, io, render)
 ```
 
-All feature crates (io, render, ui) are leaf nodes — none depend on each other.
+**Invariants:**
+- `stagelx-core` has zero internal dependencies — it is the type foundation.
+- `stagelx-gdtf` and `stagelx-dmx` are independent mid-layer crates.
+- `stagelx-patch` depends only on `core`; it provides patch data and fixture lifecycle events.
+- `stagelx-show` depends on `patch` + `gdtf`; it provides show control state, cue data, and diagnostics.
+- `stagelx-io` and `stagelx-render` are independent leaf feature crates.
+- `stagelx-ui` is the sole integrator; it may read from `io` and `render` but never vice-versa.
+- No cycles. No `tokio`.
+
+### Phase 6 Target Graph (Achieved)
+
+```
+                         stagelx-core
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+   stagelx-gdtf          stagelx-dmx          stagelx-patch
+   (→ core)              (→ core)             (→ core)
+        │                     │                     │
+        │                     ▼                     ▼
+        │              stagelx-io (→ dmx)     stagelx-show (→ patch, gdtf)
+        │                     │                     │
+        └─────────────────────┴─────────────────────┘
+                              ▼
+                         stagelx-ui
+              (→ core, gdtf, patch, show, io, render)
+```
+
+`stagelx-state` was mechanically split into:
+- `stagelx-patch` → `PatchRes`, `PatchEditState`, `DmxAddress`, `FixtureInstance`, `SpawnFixtureEvent`, `DespawnFixtureEvent`
+- `stagelx-show` → `Programmer`, `CueStack`, `Cue`, `PerfDiagnosticsRes`, `LoadVenueEvent`, `FixtureLibraryRes`
+
+`stagelx-render` depends on `stagelx-show` (for events) and `stagelx-patch` (for patch data).
+`stagelx-ui` depends on both new crates.
 
 ---
 
@@ -96,18 +166,21 @@ All feature crates (io, render, ui) are leaf nodes — none depend on each other
 
 | Purpose | Crate |
 |---|---|
-| App/ECS/rendering | `bevy` 0.18.1 |
+| App/ECS/rendering | `bevy` 0.18.0 |
 | Low-level GPU | `wgpu` (via Bevy) |
 | UI panels | `bevy_egui` 0.39.1 + `egui` |
 | GDTF/MVR ZIP parsing | `zip`, `quick-xml` |
 | 3D model loading (venue / GDTF geometry) | `tobj`, `gltf`, `ufbx` |
+| 3DS format (fixture geometry) | `ds3` (path dep `../3ds-rs`) |
 | Art-Net | custom UDP (no external crate) |
 | sACN (E1.31) | custom UDP per ANSI E1.31-2016 (no external crate) |
-| I/O thread bridge | `crossbeam-channel` (bounded 256, no tokio) |
+| I/O thread bridge | `crossbeam-channel` (bounded 8, no tokio) |
 | USB/serial DMX | `serialport` |
 | MIDI | `midir` |
 | OSC | `rosc` |
 | Image loading (gobos) | `image` (via Bevy asset loader) |
+| File dialogs | `rfd` |
+| egui extras | `egui_extras` |
 
 ---
 
@@ -144,6 +217,12 @@ MVR files extend this with scene context:
 - Beam angle = Zoom attribute value mapped to `beam_angle` from GDTF physical
 - Use **ray-marched volumetric cone shader** (wgpu custom shader) for fog effect
 - Atmosphere/fog density controlled per-scene
+- **LOD tiers** (see ADR-008):
+  - Tier 0 (<50 px screen radius): billboard sprite — zero ray-march cost
+  - Tier 1 (50–200 px): half-res offscreen (960×540), 16 ray-march steps, bilinear upsample
+  - Tier 2 (>200 px): full-res, hard cap 32 steps. 64+ steps reserved for single selected "hero" fixture only.
+- Hard cap: 64 simultaneous ray-marched beams regardless of patch size
+- Front-to-back beam sorting (`sort_beams_front_to_back`) with `depth_bias` for correct additive blending
 
 ### Gobos
 - Load gobo images from GDTF wheel slot assets
@@ -151,9 +230,10 @@ MVR files extend this with scene context:
 - Rotate with GoboIndex + GoboRotation attributes
 
 ### Fixture Geometry
-- Load GDTF geometry from embedded 3DS/GLB/OBJ → convert to Bevy mesh
+- Load GDTF geometry from embedded 3DS/GLB/OBJ → convert to Bevy mesh via `ds3::to_bevy_buffers()`
 - Articulate geometry nodes: yoke rotates with Pan, head rotates with Tilt
 - Fallback: procedural geometry (box for body, cylinder for head) when no model
+- Async asset loading with deduplication cache by `(gdtf_uuid, sub_mesh_index)`
 
 ### Color
 - Additive CMY/RGB mixing in shader
@@ -166,30 +246,39 @@ MVR files extend this with scene context:
 
 - **Universe buffer**: `[u8; 512]` per universe, up to 64 universes
 - **Merge**: HTP (Highest Takes Precedence) across input sources by default; configurable per universe
-- **Priority**: Built-in programmer > Art-Net in > sACN in (configurable)
-- **Output tick**: 44 Hz (standard DMX refresh), driven by Bevy fixed timestep
-- **Attribute → DMX**: GDTF channel functions map raw DMX values to physical attribute values bidirectionally
+- **Priority stack**: Programmer (200, LTP) > Cue playback (150, LTP) > External input (100, HTP). Higher priority wins.
+- **Output tick**: 44 Hz (standard DMX refresh), driven by Bevy `FixedUpdate`
+- **Attribute → DMX**: Pre-computed `DmxChannelMap` on each `FixtureInstance` eliminates per-tick string lookups (ADR-004). Projection lives in `stagelx-dmx::projection`.
+
+### ECS Pipeline (per `FixedUpdate` tick)
+
+```
+programmer_to_dmx ──┐
+cue_to_dmx ─────────┼→ dmx_engine_tick → artnet_send → sacn_send → usb_send
+       │            │          │
+       └─ LTP───────┘          └─ merges all sources (HTP/LTP), outputs to transports
+```
 
 ---
 
 ## I/O Protocol Details
 
-### Art-Net (Output + Input) ✅ Phase 3
+### Art-Net (Output + Input)
 - UDP port 6454, custom ArtDMX implementation (no external crate)
 - ArtDMX packet TX at 44 Hz via Bevy `FixedUpdate`
 - RX via blocking socket cloned from TX socket (`try_clone` avoids EADDRINUSE)
-- RX thread bridges to Bevy via `crossbeam-channel` (bounded 256)
+- RX thread bridges to Bevy via `crossbeam-channel` (bounded 8)
 - Source IP allowlist (cached, rebuilt only on config change)
 - Universe cap: 64 universes per source (amplification attack mitigation)
 - Configurable TX destination (default: limited broadcast 255.255.255.255)
-- ArtPoll/ArtPollReply for node discovery (future)
+- **ArtPoll/ArtPollReply:** Node discovery with `ArtNetNodeTable` Resource; UI toggle and node list in IO panel
 
-### sACN / E1.31 (Output + Input) ✅ Phase 3
+### sACN / E1.31 (Output + Input)
 - UDP port 5568, full ANSI E1.31-2016 Data Packet (638 bytes)
 - TX: rolling sequence counter, multicast 239.255.hi.lo or configurable unicast
 - RX: same clone-and-block pattern as Art-Net
 - Priority 100 default, configurable; universe cap 64
-- ArtPoll/ArtPollReply for node discovery (future)
+- **Multicast join:** `socket2::join_multicast_v4()` for explicit `IP_ADD_MEMBERSHIP` on sACN RX sockets
 
 ### USB DMX (Output)
 - Enttec DMX USB Pro protocol over serial (`serialport` crate)
@@ -199,456 +288,412 @@ MVR files extend this with scene context:
 ### MIDI (Input)
 - `midir` for cross-platform MIDI device access
 - Configurable mapping: CC → attribute, Note → cue trigger
-- Run in `midir` callback, forwarded to Bevy event queue
+- Rate-limited port scan ≤ 1 Hz (ADR-009)
+- Run in `midir` callback, forwarded to Bevy event queue via crossbeam
 
 ### OSC (Input)
 - UDP, default port 8000
 - Path schema: `/fixture/{id}/{attribute}` → float value
 - `/cue/{id}/go` for cue triggers
+- Shutdown path: `UdpSocket` wrapped in `Arc`, `shutdown(Shutdown::Both)` on disable
 
 ---
 
-## Implementation Phases
+## Architecture Decision Records
 
-### Phase 1 — Foundation ✅ Complete
-**Goal**: A Bevy app that loads a GDTF file and renders placeholder fixtures in 3D.
-
-- [x] Cargo workspace scaffold
-- [x] `stagelx-gdtf`: parse GDTF ZIP + `description.xml` (fixture type, DMX modes, attributes)
-- [x] `stagelx-core`: `FixtureType`, `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`
-- [x] `stagelx-render`: Bevy plugin — procedural fixture geometry, static scene camera
-- [x] Basic egui panels: fixture library, patch editor, programmer
-- [x] `stagelx-dmx`: `DmxEngine` with HTP/LTP merge, multi-source priority stack
-
-**Milestone**: Patch 10 moving heads, manually set Pan/Tilt/Dimmer values, see fixtures move in 3D. ✅
+Binding design rules for Phase 5 and beyond. Violations are treated as regressions.
 
 ---
 
-### Phase 2 — Programmer + Beam Rendering ✅ Complete
-**Goal**: Real-time beam visualisation driven by the built-in programmer.
+### ADR-001: Freeze `stagelx-state` — No New Resources
 
-- [x] Programmer UI: dimmer, pan/tilt, RGB color, zoom, strobe, gobo index + spin
-- [x] Beam cone mesh with additive blending (`BeamMaterial` — custom WGSL shader)
-- [x] Color mixing (RGB) in shader, driven live from Programmer resource
-- [x] Gobo projection: rotating texture sampled in the beam material
-- [x] Zoom → XZ scale on beam cone geometry
-- [x] Strobe simulation via time-based shutter open/close
-- [x] Dimmer → beam intensity and point-light intensity
-- [x] Keyboard programmer: arrow keys (pan/tilt), +/- (dimmer), R/G/B/W/X/C (color), Z (zoom)
+**Status:** ✅ Adopted → Completed  
+**Rule 1**
 
-**Milestone**: Full real-time beam visualization driven by programmer at 60 fps with 10 fixtures. ✅
+No new Bevy Resources may be added to `stagelx-state`. The crate became a dependency sink (`io` + `render` + `ui` all import it). Adding MIDI config, viewport state, or export staging here would cement it as a god-crate.
 
----
+**Routing for new state:**
+- MIDI/OSC config → `stagelx-io::config`
+- Viewport layout → `stagelx-render`
+- MVR export staging → `stagelx-gdtf::mvr_export`
 
-### Phase 3 — DMX I/O ✅ Complete
-**Goal**: Send and receive DMX from real hardware and consoles.
-
-- [x] `stagelx-state`: extract shared Bevy Resources into dependency-inversion hub
-- [x] `stagelx-io`: Art-Net output (ArtDMX packets, 44 Hz `FixedUpdate`)
-- [x] Art-Net input listener (blocking RX thread, `crossbeam-channel` bridge)
-- [x] sACN E1.31 output (638-byte Data Packet, rolling sequence, multicast/unicast)
-- [x] sACN input (separate port 5568 socket, same clone-and-block pattern)
-- [x] HTP merge across input sources via `DmxEngine` priority stack
-- [x] Universe/port configuration UI (DMX I/O egui panel)
-- [x] Security: source IP allowlist, universe cap (64), configurable TX destinations
-- [x] USB DMX output (Enttec USB Pro) — deferred to Phase 4 — ✅ completed in Phase 4
-
-**Milestone**: Receive Art-Net or sACN from a console, visualize result, simultaneously output both protocols. ✅
+**Resolution:** `stagelx-state` was mechanically extracted into `stagelx-patch` + `stagelx-show` (Phase 6.1). The old crate was deleted.
 
 ---
 
-### Phase 4 — MVR + GDTF Geometry + USB DMX ✅ Complete
-**Goal**: Import a full show file from MA3 / Depence2 and see the venue + patch.
+### ADR-002: Runtime-Agnostic Format Crates
 
-- [x] USB DMX output (Enttec USB Pro protocol over `serialport`, NonSend resource, 44 Hz)
-- [x] `stagelx-gdtf`: MVR parser (scene positions, fixture placement, embedded GDTFs)
-- [x] Import MVR: place fixtures in 3D from MVR transforms (Z-up mm → Y-up m)
-- [x] `stagelx-3ds`: pure-Rust 3DS binary chunk parser with `to_bevy_buffers()` helper
-- [x] Observer-based fixture lifecycle (`On<SpawnFixtureEvent>` / `On<DespawnFixtureEvent>`)
-- [x] GDTF-driven DMX channel mapping (pan/tilt/dimmer/colour from channel offsets)
-- [x] Patch add-fixture UI (GDTF type + mode selector, universe/channel form)
-- [x] Wire 3DS geometry → actual Bevy mesh in renderer (parser done, render hookup deferred) — ✅ `mesh_from_gdtf` wired in `on_fixture_spawned`
-- [x] MVR export (scene + patch → `.mvr` file) — deferred to Phase 5 — ✅ `export_mvr` in `stagelx-gdtf`, UI button in Library MVR tab
-- [ ] Truss / structure geometry from MVR — deferred to Phase 6
+**Status:** ✅ Adopted  
+**Rule 2**
 
-**Milestone**: MVR import places fixtures from real show files; USB DMX output to Enttec dongles. ✅
+Format crates (`stagelx-gdtf`, `ds3`) must be runtime-agnostic. They expose `Vec<[f32; 3]>`, index buffers, and materials-as-data — no Bevy types.
+
+`stagelx-3ds` was deleted and replaced with `ds3` (standalone `no_std` crate). The Bevy-aware adapter (`to_bevy_buffers`) lives in `stagelx-render::adapters::three_ds`.
 
 ---
 
-## Architecture & Performance Decisions (Pre–Phase 5 Findings)
+### ADR-003: IO Thread Abstraction
 
-Output of a structured Performance vs Architect role-debate. These are binding design rules for Phase 5 and beyond.
+**Status:** ✅ Complete  
+**Rules 3, 9, 10, 12**
 
----
+All IO transports must share a common contract. No per-transport bespoke thread management.
 
-### Immediate — Before Phase 5 Feature Work
+- `IoSource`, `IoSink` traits and `IoSupervisor` Resource defined in `stagelx-io::supervisor`.
+- RX channel depth: 8 slots (reduced from 256).
+- RX threads must use `try_send()`, not `send()`. On `TrySendError::Full`, increment `IoSupervisor::rx_drops` and continue.
+- All transport threads must have a shutdown path (`Arc<AtomicBool>` + 100 ms recv timeout) to prevent `EADDRINUSE` on re-enable.
+- `IoOverflowWarning` Bevy event must be emitted when `rx_drops` increments.
 
-#### 1. ✅ Freeze `stagelx-state`
-- **Rule:** No new Bevy Resources added to `stagelx-state` in Phase 5.
-- **Rationale:** The crate has become a dependency sink (io + render + ui all import it). Adding MIDI config, viewport state, and export staging here would cement it as a god-crate.
-- **Routing for new state:**
-  - MIDI/OSC config → `stagelx-io`
-  - Viewport layout → `stagelx-render` (`ViewportLayout` Resource)
-  - MVR export staging → `stagelx-export` (new module/crate)
-- **Phase 6:** Mechanical extraction of `stagelx-state` → `stagelx-show` (Programmer, future cue stacks) + `stagelx-patch` (PatchRes, Universe routing). Code will already live in the right places; this becomes a Cargo.toml reorganisation.
-- **Done:** Freeze doc comment added to `stagelx-state/src/lib.rs` (commit `fbb7aa5`).
-
-#### 2. ✅ Replace `stagelx-3ds` with `ds3`; move Bevy adapter to `stagelx-render`
-- **Rule:** Format crates must be runtime-agnostic. They expose `Vec<[f32; 3]>`, index buffers, and materials-as-data — no Bevy types.
-- **Done (commit `fbb7aa5`):**
-  - Vendored `stagelx-3ds` crate deleted; replaced with `ds3` path dep (`../3ds-rs`). The standalone crate adds smooth normals, transform matrix, material names, smooth groups, full test suite, serde, and no_std support.
-  - `mesh_from_gdtf` moved to `stagelx-render::adapters::three_ds` — the only Bevy-aware geometry adapter.
-  - `stagelx-render` now depends on `ds3` (runtime-agnostic) rather than the old vendored crate.
-
-#### 3. ✅ Formalise the IO thread abstraction
-- **Rule:** All IO transports share a common `IoSource` / `IoSink` contract. No per-transport bespoke thread management.
-- **Done (commit `fbb7aa5`):**
-  - `IoSource`, `IoSink` traits and `IoSupervisor` Resource defined in `stagelx-io::supervisor`.
-  - Art-Net and sACN RX channel depth reduced from 256 → 8 slots.
-  - MIDI and OSC must implement `IoSource` when wired in Phase 5; existing transports migrate in Phase 6.
-- **Deferred:** `SO_RCVBUF` = 4 MB on UDP sockets (requires `socket2` crate — add when MIDI/OSC land).
+**Resolution:** All transports implement `IoSource`/`IoSink`. Art-Net, sACN, USB, OSC use common trait contract. `socket2` tunes UDP sockets (`SO_REUSEADDR`, `SO_RCVBUF=4MB`). RX threads use `try_send()` with drop counting. `IoOverflowWarning` emitted via `Commands::trigger()`. TX decoupled to background threads.
 
 ---
 
-### Phase 5 Implementation Rules
+### ADR-004: DMX Projection Ownership
 
-#### 4. MIDI & OSC input
-- Implement `IoSource` trait — MIDI callback → crossbeam → Bevy Messages, OSC UDP → crossbeam → Bevy Messages.
-- Config Resources (`MidiConfig`, `OscConfig`) live in `stagelx-io`, not `stagelx-state`.
-- MIDI/OSC config UI panels source their data from `stagelx-io` Resources.
+**Status:** ✅ Adopted  
+**Rule 20**
 
-#### 5. ✅ Split-screen viewports
-- Implement as `render::viewports` module inside `stagelx-render`.
-- `ViewportLayout` Resource in `stagelx-render` (not `stagelx-state`).
-- Do NOT extract to a `stagelx-viewport` crate yet — promote only if `stagelx-ui` needs to drive layout independently.
-- Layout: FOH perspective (¾ width) + top ortho + side ortho.
-- **Done (commit `2dc1d79`):** `FohCamera`, `TopCamera`, `SideCamera` components; `update_viewports_on_resize` system; egui separator lines + TOP/SIDE labels.
+Attribute→DMX channel projection is the DMX engine's responsibility. It was moved from `stagelx-io::artnet` to `stagelx-dmx::projection`, eliminating `stagelx-io`'s dependency on `stagelx-gdtf`.
 
-#### 6. MVR export
-- `stagelx-mvr`: new format-pure crate (XML document model, no Bevy types).
-- `stagelx-export`: orchestration module/crate that depends on `stagelx-mvr` + domain crates. This is where the domain→format projection lives.
-- Does not depend on `stagelx-state`.
-
-#### 7. Volumetric beam rendering — three-tier LOD
-- Implement in `stagelx-render::lod` module. Not a new crate.
-- LOD tiers evaluated per-frame by screen-space projected radius:
-  - **Tier 0** (<50 px): billboard sprite — zero ray-march cost.
-  - **Tier 1** (50–200 px): half-res offscreen (960×540), 16 ray-march steps, bilinear upsample + composite.
-  - **Tier 2** (>200 px): full-res, hard cap 32 steps. 64+ steps reserved for single selected "hero" fixture only.
-- **Hard cap:** 64 simultaneous ray-marched beams regardless of patch size. Remaining fixtures render Tier 0 until screen coverage qualifies them.
-- **Lighting:** Enable `ClusteredForward` explicitly in `stagelx-render` pipeline. Reduces 500 point lights to ~4–8 per fragment per tile.
-- **Blending:** Sort beam cones front-to-back within additive tier (preserves early-z on opaque venue geometry).
-- **Target:** Beam pass ≤ 6 ms GPU at 500 fixtures, 1080p worst-case camera. Overdraw ≤ 8× framebuffer-averaged (wgpu timestamp queries).
-
-#### 8. GDTF geometry loading — async + streaming
-- Drive 3DS parsing + Mesh construction through Bevy's async `AssetLoader` (task pool, not render thread).
-- **Deduplication:** Cache `Handle<Mesh>` by `(gdtf_uuid, sub_mesh_index)`. 500 fixtures across 50 unique models = 30–50 uploads, not 500.
-- **Streaming:** Process ≤ 10 unique models per frame during patch load. 50 models = 5 frames ≈ 83 ms — invisible progressive geometry appearance.
-- **Polygon budget:** Reject/simplify any 3DS sub-mesh >8k triangles via `meshopt_simplify` at import time.
-- **Targets:** Main thread never exceeds 20 ms during patch load. Total load <2s wall-clock for 500 fixtures. GPU geometry memory ≤ 128 MB total.
-
-#### 9. DMX tick — non-blocking IO contract
-- `FixedUpdate` DMX tick uses `try_recv()` exclusively — never blocks waiting for channel data.
-- On empty channel: hold last known universe snapshot (correct DMX hold-last behaviour).
-- Emit `IoOverflowWarning` Bevy event if channel found full on 3+ consecutive `try_send()` calls (surface in IO panel UI).
+Each `FixtureInstance` carries a pre-computed `DmxChannelMap` (`[Option<u16>; 8]` per attribute), computed once at patch load time. This eliminates ~22,500 string comparisons/sec at 64 fixtures × 44 Hz.
 
 ---
 
-### ECS Lifecycle Rule
+### ADR-005: Per-Frame Allocation Ban
 
-- **Observers** (`On<SpawnFixtureEvent>`, `On<DespawnFixtureEvent>`): use for one-shot lifecycle work (spawn child entities, set initial transforms, attach geometry).
+**Status:** ✅ Adopted  
+**Rule 13**
+
+ECS systems running at frame rate or DMX tick rate must not allocate `Vec` or `HashMap` values that are discarded each tick. Use `Local<T>` to persist allocations across frames; rebuild only on structural changes.
+
+Resolved violations:
+- `lod.rs:209` — `Vec<(Entity, f32, BeamLodTier)>` → `Local<Vec<...>>`
+- `lod.rs:267` — `HashMap<FixtureId, Entity>` → `Local<HashMap<...>>`
+- `engine.rs:51` — `HashSet<u16>` + `Vec<u16>` → cached in `DmxEngine` with dirty flag
+
+---
+
+### ADR-006: Beam Material Change Detection
+
+**Status:** ✅ Adopted  
+**Rule 14**
+
+`articulate_beams` must gate material writes behind actual change detection. `beam_materials.get_mut(handle.id())` marks the Bevy asset dirty unconditionally, triggering a GPU uniform upload for every fixture every frame.
+
+Resolution: filter on `Changed<GlobalTransform>` and a cached last-programmed value; call `get_mut` only when a change is detected.
+
+---
+
+### ADR-007: Release Profile Optimisation
+
+**Status:** ✅ Adopted  
+**Rule 16**
+
+Workspace root `Cargo.toml` defines `[profile.release]` with `lto = "thin"` and `codegen-units = 1`. The `merge_htp`/`merge_ltp` loops in `stagelx-core::universe` are 512-byte SIMD candidates; cross-crate inlining is required for vectorization.
+
+Also: `[profile.dev.package."*"] opt-level = 2` keeps dependencies optimized during development builds.
+
+---
+
+### ADR-008: LOD Tier Stability
+
+**Status:** ✅ Adopted  
+**Rules 18, 19**
+
+`evaluate_beam_lod` must not flip a fixture's tier on a single frame.
+
+- **Hysteresis:** ±10 px band around each threshold. Promote when `radius > threshold + 10`, demote only when `radius < threshold - 10`.
+- **Resize:** `BeamRenderTarget` must be recreated on `WindowResized`, parallel to `update_viewports_on_resize`.
+
+---
+
+### ADR-009: MIDI Rate Limiting
+
+**Status:** ✅ Adopted  
+**Rule 15**
+
+MIDI port scan must be rate-limited to ≤ 1 Hz. `MidiInput::new("stageLX-scan")` invokes platform MIDI subsystem APIs and must not be called in `Update` (60 Hz). Use a `Local<Timer>` or elapsed-time accumulator.
+
+---
+
+### ADR-010: Fixed-Size Packet Buffers
+
+**Status:** ✅ Adopted  
+**Rule 11**
+
+`ReceivedPacket.data` must be a fixed-size `[u8; 512]` array field. The old `Arc<Vec<u8>>` pattern caused ~3,200 heap allocations/sec at high universe count with no benefit (data is consumed once and dropped).
+
+---
+
+### ADR-011: UI Decoupling & Frontend Fidelity
+
+**Status:** ✅ Adopted  
+**Rules 21–28**
+
+- **Rule 21 / 23:** `VenueLoadState` lives in `stagelx-show`. `LoadVenueEvent` breaks cross-leaf dependency. Library search query is independent of the GDTF import path field.
+- **Rule 22:** `IoConfig` split into per-protocol `*Config` + `*Stats` Resources, eliminating scheduler contention.
+- **Rule 24:** All `ComboBox` widgets use unique egui ids (`from_id_salt`).
+- **Rule 25:** TX/RX counter reflects the active protocol (`*Stats` Resource), not hardcoded Art-Net.
+- **Rule 26:** `UiLayoutState::show_status_bar` defaults to `true`.
+- **Rule 27:** Programmer selection bar resolves fixture names from `PatchRes`.
+- **Rule 28:** Encoder and fader readouts use spec font sizes (`FontId::monospace(18.0)` / `14.0`).
+
+---
+
+### ADR-012: ECS Lifecycle Discipline
+
+**Status:** ✅ Adopted  
+
+- **Observers** (`On<SpawnFixtureEvent>`, `On<DespawnFixtureEvent>`, `On<LoadVenueEvent>`): use for one-shot lifecycle work (spawn child entities, set initial transforms, attach geometry).
 - **ECS query systems with explicit `SystemSet` ordering**: use for steady-state per-frame updates (`DmxIngest → DmxMerge → FixtureApply → Render`). Do not use observers for per-frame attribute updates.
 
 ---
 
-### Success Metrics
+## Cue System Architecture
 
-| Domain | Target |
-|--------|--------|
-| Beam GPU pass | ≤ 6 ms at 500 fixtures, 1080p worst-case |
-| Framebuffer overdraw | ≤ 8× averaged (wgpu timestamp queries) |
-| DMX tick jitter | ≤ 1 ms std-dev over 10k ticks |
-| IO snapshot staleness | 0 occurrences > 100 ms under 10× Art-Net flood |
-| Patch load frame time | ≤ 20 ms main thread throughout |
-| Patch load total | < 2 s wall-clock for 500 fixtures / 50 models |
-| GPU geometry memory | ≤ 128 MB for 500-fixture rig |
-| `stagelx-state` growth | 0 new Resources added in Phase 5 |
-| File-dialog freeze | Background thread + channel (no main-thread block) | ✅ |
-| Top-bar I/O pills | Real-time `ProtocolStatus` from `*Stats` resources | ✅ |
-| FOH beam blackness | `beam_params.x` uses base half-angle in shader | ✅ |
-| Ortho view beams | Perpendicular sprite cross (`BeamSprite` + `BeamSpriteTop`) on layer 2 | ✅ |
+*Not in scope for v1, but the data model must not foreclose adding a cue stack later.*
 
----
+### Proposed Data Model (Phase 6 Foundation)
 
-## Phase 5 Mid-Point Audit — 2026-05-08
+```
+CueStack
+├── Cue[]
+│   ├── id: String
+│   ├── fade_in_ms: u32
+│   ├── fade_out_ms: u32
+│   ├── delay_ms: u32
+│   └── Snapshot (fixture_id → attribute values)
+│
+└── Playhead
+    ├── current_cue_index: usize
+    ├── next_cue_index: Option<usize>
+    └── state: Idle | Fading { progress: f32 }
+```
 
-Output of a parallel Performance + Architect multi-role analysis of the Phase 5 codebase. Violations of previously established rules are flagged. New binding rules (10–22) are added below and supersede any conflicting previous notes.
+### Integration Points
 
-### Existing Rule Violations
+1. **DMX Engine**: `DmxEngine` already supports named sources. A cue playback source is just another source in the priority stack (below programmer, above external input).
+2. **Programmer**: "Record" button captures current programmer state into a cue snapshot. "Update" overwrites the active cue with current values.
+3. **UI**: New "Cues" panel alongside Programmer. List view + GO/Back buttons. No timeline (v2 feature).
+4. **Persistence**: Cue stacks serialize to a simple JSON/YAML format. Not tied to MVR (MVR has no cue concept).
 
-| Rule | Status | Location |
-|---|---|---|
-| Rule 4: `MidiConfig`/`OscConfig` live in `stagelx-io` | **✅ RESOLVED** — split into `MidiConfig`/`OscConfig` in `stagelx-io::config` | `io/src/config.rs` |
-| Dependency graph: leaf crates don't depend on each other | **✅ RESOLVED** — `VenueLoadState` moved to `stagelx-state`; `LoadVenueEvent` breaks cross-leaf dep | `state/src/lib.rs:115` |
-| Rule 3: `IoSource`/`IoSink` contract; no bespoke thread management | **PARTIAL** — traits defined but no transport formally implements them; Art-Net/sACN/OSC now have proper shutdown paths | `io/src/supervisor.rs` |
-| Rule 9: Emit `IoOverflowWarning` when channel found full | **NOT DONE** — event type missing; `IoSupervisor::rx_drops` never incremented | `io/src/supervisor.rs` |
+### Phase 6 Scope
 
-### New Bindings (Rules 10–22)
+- [ ] `CueStack` and `Cue` types in `stagelx-show`
+- [ ] `CuePlayback` source in `DmxEngine` (priority 150, between programmer=200 and external=100)
+- [ ] Basic UI: list cues, GO / BACK / LOAD buttons
+- [ ] Keyboard shortcuts: `Enter` = GO, `Shift+Enter` = BACK
+- [ ] Save/load cue stack to `.json`
 
-#### 10. IO RX threads must use `try_send`, not `send`
-- **Rule:** IO transport RX threads must use `try_send()` on the crossbeam channel. Blocking `send()` stalls the OS receive buffer under load, causing network-level packet loss invisible to the application.
-- **Action:** `artnet.rs:147`, `sacn.rs:194` — change `tx.send(pkt)` → `tx.try_send(pkt)`. On `Err(TrySendError::Full)` increment `IoSupervisor::rx_drops` and continue.
-- **Status:** ✅ Done — Art-Net, sACN, OSC already use `try_send`; MIDI callback fixed to use `try_send`. |
+### Deferred to v2
 
-#### 11. No `Arc<Vec<u8>>` on the UDP hot path — use `[u8; 512]`
-- **Rule:** `ReceivedPacket.data` must be a fixed-size `[u8; 512]` array field. The `Arc<Vec<u8>>` pattern causes ~3,200 heap allocations/sec at high universe count with no benefit (data is consumed once and dropped).
-- **Action:** `artnet.rs:141`, `sacn.rs:188`.
-
-#### 12. All IO transport threads must have a shutdown path
-- **Rule:** No transport thread may be permanently leaked when its protocol is disabled. Leaked threads hold bound OS ports, causing `EADDRINUSE` on re-enable.
-- **Action:** `osc.rs:74` — wrap `UdpSocket` in `Arc`, store a clone in `OscState`, call `shutdown(Shutdown::Both)` to unblock `recv_from` on disable. Apply the same pattern to Art-Net/sACN using the `IoSupervisor` shutdown signal once Rule 3 is implemented.
-- **Status:** ✅ Done — OSC already had shutdown flag + timeout; Art-Net and sACN now have `Arc<AtomicBool>` shutdown + 100ms recv timeout. |
-
-#### 13. No per-frame heap allocation in `Update` or `FixedUpdate` systems
-- **Rule:** ECS systems running at frame rate or the DMX tick rate must not allocate `Vec` or `HashMap` values that are discarded each tick. Use `Local<T>` to persist allocations across frames; rebuild only on structural changes.
-- **Known violations:**
-  - `lod.rs:209` — `Vec<(Entity, f32, BeamLodTier)>` allocated every frame → `Local<Vec<...>>`
-  - `lod.rs:267` — `HashMap<FixtureId, Entity>` allocated every frame → `Local<HashMap<...>>`, rebuilt only on `Added<BeamSprite>` / `RemovedComponents<BeamSprite>`
-  - `engine.rs:51` — `HashSet<u16>` + `Vec<u16>` allocated every 44 Hz tick → cache in `DmxEngine` with a dirty flag
-
-#### 14. `articulate_beams` must gate material writes behind change detection
-- **Rule:** `beam_materials.get_mut(handle.id())` marks the Bevy asset dirty unconditionally, triggering a GPU uniform upload for every fixture every frame. `Mat4::inverse()` must not run for static fixtures. Both must be gated on actual change.
-- **Action:** `render/src/fixture.rs:303–316` — filter on `Changed<GlobalTransform>` and a cached last-programmed value; call `get_mut` only when a change is detected.
-
-#### 15. MIDI port scan must be rate-limited to ≤ 1 Hz
-- **Rule:** `MidiInput::new("stageLX-scan")` invokes platform MIDI subsystem APIs and must not be called in `Update` (60 Hz). Use a `Local<Timer>` or elapsed-time accumulator.
-- **Action:** `io/src/midi.rs:34`.
-
-#### 16. Release profile must enable LTO
-- **Rule:** Workspace `Cargo.toml` must define `[profile.release]` with `lto = "thin"` and `codegen-units = 1`. The `merge_htp`/`merge_ltp` loops in `stagelx-core::universe` are 512-byte SIMD candidates; cross-crate inlining is required for the compiler to vectorize them.
-- **Action:** Add to root `Cargo.toml`. Also add `[profile.dev.package."*"] opt-level = 2` to keep dependencies optimized during development builds.
-
-#### 17. Remove the `tokio` workspace dependency
-- **Rule:** The project correctly uses sync threads + crossbeam. `tokio` is declared in workspace deps but unused by any crate. It adds ~600 KB of compile cost and misleads readers about the runtime model. Do not add tokio.
-- **Action:** Remove `tokio` from `Cargo.toml:27`.
-
-#### 18. LOD tier transitions must use a ±10 px hysteresis band
-- **Rule:** `evaluate_beam_lod` must not flip a fixture's tier on a single frame. Apply a ±10 px band around each threshold: promote when `radius > threshold + 10`, demote only when `radius < threshold - 10`. Prevents per-frame `commands.entity().insert()` churn and visible flickering at tier boundaries.
-- **Action:** `lod.rs:225`. Store previous tier per entity (component or `Local<HashMap<Entity, BeamLodTier>>`).
-
-#### 19. `BeamRenderTarget` must resize on `WindowResized`
-- **Rule:** The half-res beam render target is created once at startup. It must be recreated whenever `WindowResized` fires, parallel to `update_viewports_on_resize`. Stale dimensions on HiDPI displays or after window resize produce incorrect compositing.
-- **Action:** `render/src/lod.rs:84` — add a resize system listening on `EventReader<WindowResized>`.
-
-#### 20. `programmer_to_dmx` belongs in `stagelx-dmx`, not `stagelx-io`
-- **Rule:** Attribute→DMX channel projection is the DMX engine's responsibility. Its current location in `stagelx-io::artnet` is the reason `stagelx-io` has an unnecessary dep on `stagelx-gdtf`. Moving it enables pre-computation of a `DmxChannelMap` at patch load time, eliminating per-tick GDTF `&str` lookups (currently ~22,528 string comparisons/sec at 64 fixtures × 44 Hz).
-- **Action:** Move `artnet.rs:228–306` → `dmx/src/projection.rs`. Add a `DmxChannelMap` cache (`[Option<u16>; 8]` per attribute) to `FixtureInstance`, computed once in `on_fixture_spawned`. Remove `stagelx-gdtf` from `stagelx-io/Cargo.toml`.
-
-#### 21. `VenueLoadState` must move out of `stagelx-render`
-- **Rule:** `VenueLoadState` is application state, not render state. `stagelx-ui` must not import from `stagelx-render` to drive venue-load logic — this is the only inter-leaf dependency in the workspace and directly violates the dependency graph invariant. UI must fire a `LoadVenueEvent` instead of querying render entities directly.
-- **Action:** Move `VenueLoadState` to `stagelx-state`. Update `ui/src/lib.rs:17,108`.
-
-#### 22. `IoConfig` must be split into per-protocol config + stats Resources
-- **Rule:** `IoConfig` currently holds user intent fields and runtime telemetry counters for five protocols in one struct. Every `ResMut<IoConfig>` borrow is exclusive — all five protocol systems compete for it each frame, creating real Bevy scheduler contention. Split into:
-  - Per-protocol `*Config` Resources (user intent: IPs, ports, enabled flags) — owned by UI, written rarely.
-  - Per-protocol `*Stats` Resources (frame counters, status strings) — owned by the IO system, written per-frame.
-  - Config Resources for MIDI and OSC must live in `stagelx-io`, not `stagelx-state` (aligns with Rule 4).
-- **Action:** `state/src/lib.rs:107–219` → split across 5 new files in `io/src/`.
-- **Status:** ✅ Done — `ArtNetConfig`/`Stats`, `SacnConfig`/`Stats`, `UsbConfig`/`Stats`, `MidiConfig`/`Stats`, `OscConfig`/`Stats` created; `IoConfig` removed from `stagelx-state`. |
-
-### Prioritized Fix List
-
-Items 1–4 are under 45 minutes combined and must be done before any show call.
-
-| # | Action | Files | Effort |
-|---|---|---|---|
-| 1 | `try_send` in Art-Net/sACN RX threads (Rule 10) | `artnet.rs:147`, `sacn.rs:194` | 30 min | ✅ |
-| 2 | Fix OSC socket leak on disable (Rule 12) | `osc.rs:74` | 1 h | ✅ |
-| 3 | Remove `tokio` workspace dep (Rule 17) | `Cargo.toml:27` | 5 min | ✅ |
-| 4 | Add `[profile.release]` with LTO (Rule 16) | `Cargo.toml` | 5 min | ✅ |
-| 5 | Split `IoConfig` into per-protocol `*Config` + `*Stats` (Rules 22 + 4) | `state/src/lib.rs:107–219`, IO crates | 1 day | ✅ |
-| 6 | Gate `articulate_beams` on `Changed<GlobalTransform>` (Rule 14) | `render/src/fixture.rs:303` | 2 h | ✅ |
-| 7 | `[u8; 512]` on `ReceivedPacket` (Rule 11) | `artnet.rs:141`, `sacn.rs:188` | 30 min | ✅ |
-| 8 | Move `programmer_to_dmx` to `stagelx-dmx` + `DmxChannelMap` cache (Rule 20) | `artnet.rs:228–306` → `dmx/src/projection.rs` | 4 h | ✅ |
-| 9 | Move `VenueLoadState` to `stagelx-state` (Rule 21) | `ui/src/lib.rs:17,108` | 1 h | ✅ |
-| 10 | Implement `IoSource` for Art-Net/sACN/OSC; wire `rx_drops` (Rule 3 + 10) | `supervisor.rs`, transports | 1 day | 🔲 — deferred to Phase 6 |
-| 11 | `Local<Vec>` + `Local<HashMap>` in LOD systems (Rule 13) | `lod.rs:209`, `lod.rs:267` | 2 h | ✅ |
-| 12 | Cache universe ID list in `DmxEngine` with dirty flag (Rule 13) | `engine.rs:51` | 1 h | ✅ |
-| 13 | LOD hysteresis ±10 px (Rule 18) | `lod.rs:225` | 1 h | ✅ |
-| 14 | Resize `BeamRenderTarget` on `WindowResized` (Rule 19) | `lod.rs:84` | 1 h | ✅ |
-| 15 | Rate-limit MIDI port scan to 1 Hz (Rule 15) | `midi.rs:34` | 15 min | ✅ |
+- Cross-fade timing (follow/hang times)
+- Effect engine (chases, shapes)
+- MIDI/OSC trigger mapping to cue GO
 
 ---
 
-## Phase 5 Mid-Point Audit — Frontend UI Review — 2026-05-08
+## Implementation Phase Archive
 
-Output of a Frontend role analysis comparing the live `stagelx-ui` implementation against the `design_handoff_stagelx_ui` brief (JSX prototype + `tokens.css`). Violations and regressions are binding fixes for Phase 5 completion.
+Completed phases are summarized here for historical reference. Detailed audit findings and fix lists are preserved in the git history (commits `fbb7aa5`, `2dc1d79`).
 
-### Panel Scores vs. Design Brief
+### Phase 1 — Foundation ✅
+Cargo workspace scaffold; GDTF ZIP/XML parser; core types (`FixtureType`, `FixtureInstance`, `Patch`, `Universe`, `DmxBuffer`); procedural fixture geometry; basic egui panels; `DmxEngine` with HTP/LTP merge.
 
-| Panel | Score | Primary blocker |
-|---|---:|---|
-| Layout shell + top bar | 72 | Status bar defaults off; viewport borders via `painter.line_segment` not layout primitives |
-| Programmer | 68 | Fixture names always `"—"`; fader/encoder font sizes wrong; strobe Hz display bug |
-| Patch | 62 | Search field double-renders; `ComboBox` id collision; live dot absent; shift-range select stub |
-| DMX I/O | 58 | TX/RX counter always reads Art-Net data regardless of active protocol; MIDI CCs read-only |
-| Library | 55 | Search input aliases GDTF import path (functional regression); tab active border wrong edge |
+### Phase 2 — Programmer + Beam Rendering ✅
+Programmer UI (dimmer, pan/tilt, RGB, zoom, strobe, gobo); beam cone mesh with additive blending and custom WGSL shader; gobo projection; zoom→beam scaling; keyboard programmer.
 
-**Overall completeness: ~56 / 100. Visual token fidelity: ~85 %. Atom coverage: 8 / 11 (4 of 8 partial).**
+### Phase 3 — DMX I/O ✅
+Art-Net Tx/Rx; sACN Tx/Rx; HTP merge across input sources; universe/port configuration UI; security hardening (source allowlist, universe cap); `stagelx-state` established as shared resource hub (later split in Phase 6).
 
-### Priority 1 — Functional Regressions (must fix before Phase 5 milestone)
+### Phase 4 — MVR + GDTF Geometry + USB DMX ✅
+USB DMX output (Enttec USB Pro); MVR parser (scene positions, fixture placement); `ds3` 3DS parser; observer-based fixture lifecycle; GDTF-driven DMX channel mapping; patch add-fixture UI; MVR export.
 
-| # | Issue | Location |
-|---|---|---|
-| R1 | `res.import_path` used as Library search query — typing in search overwrites the GDTF load path | `library.rs:132` |
-| R2 | Both Add-Fixture `ComboBox::from_label("")` share the same egui id — Type combo broken | `patch.rs:302,320` |
-| R3 | TX/RX counter always reads `artnet_tx_count`/`artnet_rx_count` even when MIDI/OSC is active | `io_panel.rs:112,122` |
-| R4 | `UiLayoutState::show_status_bar` defaults `false` — status bar invisible by default; spec requires always-on | `lib.rs:42,204` |
-| R5 | Programmer selection bar fixture names always `"—"` — `PatchRes` not passed through | `programmer.rs:68` |
-
-### Priority 2 — Spec Violations (visual fidelity)
-
-| # | Issue | Location |
-|---|---|---|
-| V1 | Encoder hub readout uses `TextStyle::Body` — spec requires `FontId::monospace(18.0)` | `widgets.rs:521` |
-| V2 | Fader fill is flat `accent * 0.8` — spec requires two-stop gradient mesh (`ACCENT → FADER_GRADIENT_BOTTOM`) | `widgets.rs:380` |
-| V3 | Library tab active border drawn at `rect.min.y` (top) — spec requires `rect.max.y - 1.0` (bottom) | `library.rs:89` |
-| V4 | Patch search is custom painted rect + overlapping `TextEdit` — double-renders, must be single widget | `patch.rs:60–75` |
-| V5 | Colour active-row name hardcoded `"Custom"` — should match nearest preset name | `programmer.rs:163` |
-| V6 | Minimize button wired in `panel_titlebar()` but docked rail headers don't call it — minimize unreachable from UI | `lib.rs:238–248` |
-| V7 | Background neutrals (`BG_APP`, `BG_CHROME`) converted slightly too dark from oklch — depth contrast flatter than intended | `theme.rs` |
-| V8 | Encoder/fader readout not calling monospace font — renders in proportional font at default body size | `widgets.rs:336,521` |
-
-### Priority 3 — Missing Components
-
-- Shift-click range select (stub only, no range computation) — `patch.rs:152`
-- Live/idle `StatusDot` per fixture row in Patch list
-- `dropzone()` Browse button must be inside the allocated rect, not below it — `widgets.rs:603–607`
-- USB serial port enumeration chevron button — `io_panel.rs` USB section
-- Protocol strip status dots read from hardcoded `DotState` instead of `IoConfig` live fields — `io_panel.rs:62`
-- MIDI CC cells are read-only; Learn button is a TODO — `io_panel.rs` MIDI section
-- PICK button absent from Colour active row — `programmer.rs:~170`
-- `PanelChrome` shadow (`Frame::shadow`) not applied to any floating panel
-- Detach/minimize icons are unicode fallbacks (`"⛶"` / `"━"`), not the spec SVG glyphs
-
-### New Bindings (Rules 23–28)
-
-#### 23. Library search query must be independent of the import path field
-- **Rule:** The Library panel must maintain a separate `search_query` string in `ui.ctx().data_mut()` temp storage (keyed by a stable `egui::Id`). It must never alias `FixtureLibraryRes::import_path` or any other Resource field.
-- **Action:** `library.rs:132`.
-
-#### 24. All `ComboBox` widgets must have unique egui ids
-- **Rule:** `egui::ComboBox::from_label("")` may not be used more than once in the same UI scope. Use `from_id_salt(unique_key)` or `from_label("unique visible label")`. Duplicate ids cause silent widget corruption.
-- **Action:** `patch.rs:302,320` — change second to `ComboBox::from_id_salt("mode_combo")`.
-
-#### 25. TX/RX counter must reflect the active protocol
-- **Rule:** The IO panel TX/RX counter card must read counters from the Resource matching `IoState::active_protocol`, not always Art-Net. After the IoConfig split (Rule 22), each `*Stats` Resource provides its own counters.
-- **Action:** `io_panel.rs:112,122`.
-
-#### 26. `UiLayoutState::show_status_bar` must default to `true`
-- **Rule:** The status bar is always visible per the design brief. Implement `Default` manually for `UiLayoutState` (do not use `#[derive(Default)]`) and set `show_status_bar: true`.
-- **Action:** `lib.rs:42`.
-
-#### 27. Fixture names must be resolved from `PatchRes` in the programmer selection bar
-- **Rule:** The programmer panel must receive a reference to `PatchRes` and look up `FixtureInstance::name` for each selected id. Display as `"Name · Name · Name"` with a `"N/M"` count suffix. `"—"` is only shown when the selection is empty.
-- **Action:** `programmer.rs:68`. Thread `patch: &PatchRes` through `programmer_panel_docked`.
-
-#### 28. Encoder and fader readouts must use the spec font sizes
-- **Rule:** Encoder hub value text must use `egui::FontId::monospace(18.0)`. Fader readout text must use `egui::FontId::monospace(14.0)`. Neither may fall back to `TextStyle::Body`.
-- **Action:** `widgets.rs:521` (encoder), `widgets.rs:336` (fader).
-
-### Frontend Fix Sequence (ordered)
-
-| # | Regression/Rule | Files | Effort | Status |
-|---|---|---|---|---|
-| 1 | R4 — status bar default true (Rule 26) | `lib.rs:42` | 10 min | ✅ Done |
-| 2 | R2 — ComboBox id collision (Rule 24) | `patch.rs:302,320` | 5 min | ✅ Done |
-| 3 | R1 — Library search aliases import path (Rule 23) | `library.rs:132` | 30 min | ✅ Done |
-| 4 | R5 — Fixture names in programmer bar (Rule 27) | `programmer.rs:68`, `lib.rs` call site | 45 min | ✅ Done |
-| 5 | R3 — TX/RX counter active protocol (Rule 25) | `io_panel.rs:112,122` | 30 min | ✅ Done |
-| 6 | V3 — Library tab border wrong edge | `library.rs:89` | 5 min | ✅ Done |
-| 7 | V4 — Patch search double-render | `patch.rs:60–75` | 30 min | ✅ Done |
-| 8 | V8 — Encoder/fader monospace font (Rule 28) | `widgets.rs:336,521` | 20 min | ✅ Done |
-| 9 | V2 — Fader gradient fill | `widgets.rs:380` | 1 h | ✅ Done |
-| 10 | V6 — Wire minimize button in docked rail headers | `lib.rs:238–248,264–272` | 30 min | ✅ Done |
-| 11 | P3 — Protocol strip dots from `IoConfig` | `io_panel.rs:62` | 30 min | ✅ Done |
-| 12 | P3 — `dropzone()` Browse button inside rect | `widgets.rs:603–607` | 30 min | ✅ Done (`widgets.rs`); library inline dropzones still use out-of-rect buttons — **in progress** |
-| 13 | P3 — Shift-click range select | `patch.rs:152` | 1 h | ✅ Done |
-
-### Remaining Open Items (post-audit)
-
-| # | Item | Location | Rule | Status |
-|---|---|---|---|---|
-| A | Library GDTF/MVR/Venue inline dropzones place Browse outside allocated rect — replace with `widgets::dropzone()` | `library.rs:195–238, 287–315, 361–397` | P3 | ✅ Done |
-| B | `library.rs` directly imports `stagelx_render::{VenueRoot, load_venue}` — add `LoadVenueEvent` to break cross-leaf dep | `library.rs:4`, `lib.rs:117` | Rule 21 | ✅ Done — `LoadVenueEvent` added to `stagelx-state`; render observer in `stagelx-render::on_load_venue` |
-| C | Floating panels missing `Frame::shadow` | `lib.rs:497–545` | P3 | ✅ Done |
-| D | Detach/minimize icons are unicode fallbacks (`"⛶"` / `"━"`) | `lib.rs`, `widgets.rs` | P3 (cosmetic) | ✅ Done — painter-drawn corners-out + bar glyphs |
-| E | Compiler warnings cleanup (unused vars, dead assignments, unused imports) | multiple | warnings | ✅ Done |
-| F | `allocate_ui_at_rect` deprecated → `allocate_new_ui` (~13 call sites across all panels) | `lib.rs`, `programmer.rs`, `io_panel.rs`, `widgets.rs` | deprecation | ✅ Done |
-
-*Last updated: 2026-05-08 — All P1/P2/P3 audit items done (A–F); Rule 21 resolved via LoadVenueEvent; workspace builds clean with zero errors and zero warnings.*
+### Phase 5 — Geometry, I/O Surfaces + Advanced Rendering ✅
+MIDI input (`midir` + crossbeam); OSC input (`rosc`); MIDI + OSC config UI; MVR export (ZIP writer); ray-marched volumetric fog cone; three-tier LOD with hard cap 64; front-to-back beam sorting; split-screen viewports (FOH + top + side); camera orbit/pan; FBX venue loader; async file dialogs; zero compiler warnings; all UI audit items resolved.
 
 ---
 
-### Phase 5 — Geometry, I/O Surfaces + Advanced Rendering (Weeks 17–20) ✅ Complete
-**Goal**: Real fixture/venue geometry, full input surface coverage, professional rendering.
+## Phase 6 — Production Hardening & Cue Foundation
 
-**Geometry loading**
-- [x] OBJ venue loader (`tobj` → Bevy mesh) — ✅ already existed
-- [x] glTF/GLB venue loader (`gltf` crate → Bevy mesh) — ✅ already existed
-- [x] FBX venue loader (`ufbx` crate → Bevy mesh, triangulated) — ✅ added 2026-05-08
-- [x] Wire `ds3::to_bevy_buffers()` into `on_fixture_spawned` (real GDTF models, cuboid fallback) — ✅ done earlier
-- [x] "Scene Assets" UI section: load venue files, place at configurable world offset — ✅ `VenueLoadState::offset` + X/Y/Z DragValues in Venue tab, wired through `LoadVenueEvent` to venue root transform
+**Goal:** Harden the application for real show use, complete the `IoSource` abstraction, split `stagelx-state`, and lay the cue-system foundation. Sub-phases 6.1–6.4 are complete; 6.5–6.8 remain open.
 
-**I/O surfaces**
-- [x] MIDI input: `midir` callback → crossbeam → Bevy; CC → global Programmer or selected fixtures via `MidiTarget`
-- [x] OSC input: `rosc` UDP → crossbeam → Bevy; `/fixture/{id}/{attr}` float messages routed per-fixture through DMX engine
-- [x] MIDI + OSC config UI (device selector, port, CC mapping table, target mode toggle)
+**Timeline:** Weeks 21–26
 
-**MVR export** (deferred from Phase 4)
-- [x] Write `GeneralSceneDescription.xml` from current patch + library — ✅ `mvr_export::export_mvr`
-- [x] Package GDTFs + XML into ZIP → save `.mvr` file — ✅ ZIP writer with embedded GDTFs
+---
 
-**Rendering upgrades**
-- [x] Ray-marched volumetric fog cone in `BeamMaterial` WGSL shader (march view ray through cone volume, accumulate density)
-- [x] Three-tier LOD: Tier 0 billboard sprite, Tier 1 half-res offscreen (16 steps), Tier 2 full-res (32 steps)
-- [x] Hard cap 64 simultaneous ray-marched beams
-- [x] Dynamic step count uniform in beam shader
-- [x] Front-to-back beam sorting (deferred to profiling phase) — ✅ `sort_beams_front_to_back` system; `BeamMaterial::depth_bias` negates view-space Z for ascending front-to-back order; 0.5 epsilon to avoid per-frame asset dirty
-- [x] Split-screen viewports: primary FOH perspective (3/4 width) + top ortho + side ortho — ✅ done earlier (commit `2dc1d79`)
-- [x] Camera orbit/pan for FOH view; fixed orthographic cameras for top/side
+### 6.1 Crate Refactoring: `stagelx-state` → `stagelx-show` + `stagelx-patch` ✅
 
-**Milestone**: Load a real venue GLB, import an MVR with GDTF fixture models, control from a MIDI surface or OSC (TouchDesigner), see volumetric beams in three views simultaneously.
+**Rationale:** `stagelx-state` mixed show control state and patch data. Splitting aligns with bounded contexts and reduces compile-time coupling.
+
+**Migration (mechanical — no logic changes):**
+
+| New Crate | Contents | Dependencies |
+|---|---|---|
+| `stagelx-patch` | `PatchRes`, `PatchEditState`, `SpawnFixtureEvent`, `DespawnFixtureEvent`, `DmxAddress`, `FixtureInstance` re-exports | `stagelx-core` |
+| `stagelx-show` | `Programmer`, `PerfDiagnosticsRes`, `LoadVenueEvent`, `CueStack`, `Cue`, `CuePlayhead`, `FixtureLibraryRes` | `stagelx-core`, `stagelx-patch`, `stagelx-gdtf` |
+
+**Completed:**
+1. ✅ Created `crates/stagelx-patch/` and `crates/stagelx-show/`
+2. ✅ Updated 6 `Cargo.toml` files, 13 `.rs` files
+3. ✅ Deleted `stagelx-state` crate entirely
+4. ✅ `cargo check --workspace` passes with zero warnings
+
+---
+
+### 6.2 IO Transport Formalisation ✅
+
+**Goal:** Complete ADR-003. All transports implement `IoSource` / `IoSink`.
+
+**Completed:**
+- ✅ `IoSource` / `IoSink` trait definitions in `stagelx-io::supervisor` (instance methods, `&self`)
+- ✅ `ArtNetRxSource` / `ArtNetTxSink` — full Art-Net TX/RX with trait impls
+- ✅ `SacnRxSource` / `SacnTxSink` — full sACN TX/RX with trait impls
+- ✅ `OscRxSource` / `OscTxSink` — OSC TX/RX with trait impls
+- ✅ `UsbTxSink` — USB DMX TX with trait impl
+- ✅ `IoSupervisor::rx_drops` / `tx_drops` increment on `TrySendError::Full`
+- ✅ `IoOverflowWarning` Bevy event emitted via `Commands::trigger()`
+- ✅ `socket2` for `SO_REUSEADDR` + `SO_RCVBUF=4MB` on UDP sockets
+- ✅ TX decoupled to background threads (no frame drops on backpressure)
+- ✅ USB converted from `NonSend` to `Resource`
+
+**Success metric:** Enabling/disabling a protocol 100 times in a loop never produces `EADDRINUSE`.
+
+---
+
+### 6.3 Protocol Completeness ✅
+
+**Art-Net node discovery:**
+- ✅ `ArtPoll` broadcast every 3 s when `discovery_enabled`
+- ✅ `ArtPollReply` parser with full node metadata (name, IP, ports, universes, status)
+- ✅ `ArtNetNodeTable` Resource with version counter for change detection
+- ✅ UI: discovery toggle + scrollable node list in IO panel
+
+**sACN multicast join:**
+- ✅ `socket2::join_multicast_v4()` for explicit `IP_ADD_MEMBERSHIP` on RX socket
+- ✅ Multicast group `239.255.hi.lo` per configured RX universe
+- ✅ Graceful fallback when join fails
+
+---
+
+### 6.4 Cue System Foundation ✅
+
+**Data model (in `stagelx-show`):**
+- ✅ `Cue` struct: id, label, fade_in_ms, snapshot (`HashMap<FixtureId, CueValue>`)
+- ✅ `CueValue` enum covering dimmer/pan/tilt/color/zoom/strobe/gobo
+- ✅ `CueStack` struct: ordered cue list + playhead state (`Idle` / `Fading`)
+- ✅ `CuePlayhead` Resource tracking active cue index and fade progress
+- ✅ `CuePlaybackRes` DMX source wrapper; `cue_to_dmx()` system in `stagelx-dmx` (priority 150, LTP)
+
+**Events & observers (Bevy 0.18 observer pattern):**
+- ✅ `RecordCueEvent`, `GoCueEvent`, `BackCueEvent`, `DeleteCueEvent`
+- ✅ Observer handlers in `stagelx-show::cue`
+
+**UI (in `stagelx-ui::cue`):**
+- ✅ Cue panel in left rail alongside Programmer (dockable/minimizable)
+- ✅ Cue list table with active-cue highlighting
+- ✅ GO / BACK / RECORD buttons
+- ✅ Keyboard shortcuts: `Enter` = GO, `Shift+Enter` = BACK
+- ✅ `PanelKind::Cue` variant in layout system
+
+**Persistence:**
+- ✅ `serde` serialize/deserialize `CueStack` to `show.json`
+- ✅ `load_cue_stack()` / `save_cue_stack()` helpers
+
+---
+
+### 6.5 Truss / Structure Geometry from MVR
+
+**Deferred from Phase 4.**
+
+- [ ] Parse `Truss` and `SceneObject` elements from MVR `GeneralSceneDescription.xml`
+- [ ] Load associated 3D models (GLB/OBJ/3DS) referenced by MVR
+- [ ] Render as static opaque geometry in venue layer
+- [ ] Apply `VenueLoadState::offset` to truss geometry
+
+---
+
+### 6.6 Test Corpus & Fixture Validation
+
+**Goal:** Build confidence in GDTF parser robustness.
+
+- [ ] Download 30 fixture files from gdtf-share.com (cross-manufacturer sample)
+- [ ] Create `tests/fixture_corpus/` directory (git-LFS or ignored)
+- [ ] Write `gdtf_parser_tests` — parse every file, assert no panic, assert ≥1 DMX mode
+- [ ] Report parsing failures as structured issues (manufacturer, model, error)
+- [ ] CI: `cargo test --workspace` runs corpus tests
+
+---
+
+### 6.7 Performance Profiling & Optimisation
+
+**Targets (from Phase 5 success metrics):**
+
+| Domain | Target | Verification |
+|---|---|---|
+| Beam GPU pass | ≤ 6 ms at 500 fixtures, 1080p | wgpu timestamp queries |
+| Framebuffer overdraw | ≤ 8× averaged | wgpu timestamp queries |
+| DMX tick jitter | ≤ 1 ms std-dev over 10k ticks | `PerfDiagnosticsRes` |
+| IO snapshot staleness | 0 occurrences > 100 ms | synthetic flood test |
+| Patch load frame time | ≤ 20 ms main thread throughout | `bevy_diagnostic` |
+| Patch load total | < 2 s wall-clock for 500 fixtures / 50 models | stopwatch |
+| GPU geometry memory | ≤ 128 MB for 500-fixture rig | `estimate_gpu_memory` |
+
+**Tasks:**
+- [ ] Integrate `bevy::diagnostic::FrameTimeDiagnosticsPlugin`
+- [ ] Add wgpu timestamp queries to beam pass (Tier 1 + Tier 2)
+- [ ] Synthetic benchmark: spawn 500 fixtures, measure frame time
+- [ ] Synthetic benchmark: 10× Art-Net flood, measure IO staleness
+- [ ] Document profiling workflow in `docs/profiling.md`
+
+---
+
+### 6.8 Cleanup & Tech Debt
+
+- [ ] Remove unused `stagelx-render` dependency from `stagelx-ui/Cargo.toml`
+- [ ] Verify all `#[allow(dead_code)]` have associated tickets or are removed
+- [ ] Run `cargo clippy --workspace -- -D warnings` and fix all lints
+- [ ] Run `cargo audit` and document any accepted advisories
+- [ ] Update `README.md` with current feature set and build instructions
+- [ ] Update `CHANGELOG.md` for v0.1.0 release
+
+---
+
+### Phase 6 Milestone
+
+> Load a 200-fixture MVR from a real show file. Control beams via MIDI surface. Record 5 cues. Play back cue stack with cross-fade. Output Art-Net and sACN simultaneously. Zero crashes over a 4-hour session. CPU < 20 %, GPU beam pass < 6 ms.
 
 ---
 
 ## Open Questions / Decisions Needed
 
-1. **GDTF 3D model format**: GDTF v1.1 uses 3DS format for geometry. Need a 3DS loader or conversion pipeline (3DS → glTF at import time). Evaluate `three-d` or write a minimal 3DS loader.
+1. **GDTF 3D model format:** GDTF v1.1 uses 3DS format for geometry. `ds3` handles this. Future GDTF versions may use glTF — monitor DIN SPEC 15800 revisions.
 
-2. **Bevy version**: Settled on Bevy 0.18.1. ✅
+2. **Bevy version:** 0.18.0. Evaluate 0.19 after Phase 6 (Bevy release cycle ~4 months). Do not upgrade mid-Phase 6.
 
-3. **Shader approach for beams**: Resolved — custom `BeamMaterial` via Bevy's `Material` trait + WGSL shader with additive blending. Gobo projection via rotating UV texture lookup in the beam material. ✅
+3. **Shader approach for beams:** Resolved — custom `BeamMaterial` via Bevy's `Material` trait + WGSL shader. ✅
 
-4. **Cue system**: Not in scope for v1, but the data model should not foreclose adding a cue stack later. `DmxBuffer` should support named snapshots.
+4. **Cue system:** Phase 6 foundation only. Full cue stack (effects, chases) is v2.
 
-5. **GDTF-share API**: gdtf-share.com has a REST API for downloading fixture files by manufacturer/model. Worth integrating a fixture browser that can pull directly from the share.
+5. **GDTF-share API:** gdtf-share.com has a REST API for downloading fixture files by manufacturer/model. Worth integrating a fixture browser that can pull directly from the share. **Decision:** Defer to v2 — requires API key and caching strategy.
 
-6. **Test strategy**: GDTF files vary wildly in quality. Build a fixture file test corpus (grab 20–30 files from gdtf-share.com across manufacturers) and validate parser against them early.
+6. **Art-Net node discovery:** ArtPoll/ArtPollReply in Phase 6.
 
-7. **Art-Net node discovery**: ArtPoll/ArtPollReply not yet implemented. Nodes may need manual IP configuration until then.
+7. **sACN multicast join:** `IP_ADD_MEMBERSHIP` in Phase 6.
 
-8. **sACN multicast join**: `IP_ADD_MEMBERSHIP` not yet set — relies on IGMP snooping or broadcast fallback on managed LANs. Works on direct links; may need explicit join for complex network topologies.
+8. **Show file format:** MVR has no cue concept. Use a sidecar `.json` for cue stacks, or extend MVR unofficially? **Decision:** Sidecar `.json` for v1. Official MVR extension proposal for v2.
 
 ---
 
 ## Non-Goals (v1)
 
-- Cue stack / show playback (Phase 2+ of the project, after v1 ships)
+- Full cue stack / show playback (Phase 6 lays foundation; v2 completes)
 - Video / media server integration
 - Path-traced / offline rendering
 - Mobile or web targets
 - Network multi-user collaboration
+- Fixture builder / GDTF authoring
 
 ---
 
@@ -661,8 +706,38 @@ cargo init --name stageLX
 # then convert to workspace and add crates/
 ```
 
-Suggested `.gitignore`: standard Rust gitignore + `*.gdtf` test files (large binaries).
+Suggested `.gitignore`: standard Rust gitignore + `*.gdtf` test files (large binaries) + `tests/fixture_corpus/`.
 
 ---
 
-*Last updated: 2026-05-10 — Phase 5 rendering fixes: FOH beam blackness (shader cone-angle mismatch), top/side ortho view beam visibility (perpendicular sprite cross + dedicated render layer), async file dialogs (background thread + channel), top-bar protocol pills wired to live I/O stats, runtime query conflict fix, camera render-graph warning suppression.*
+## Changelog
+
+### 2026-05-10 — Phase 6.1–6.4 complete
+- **6.1 Crate split:** `stagelx-state` → `stagelx-patch` + `stagelx-show`. 8 crates in workspace.
+- **6.2 IO formalisation:** All transports implement `IoSource`/`IoSink`. `socket2` tuning. Overflow warnings.
+- **6.3 Protocol completeness:** ArtPoll/ArtPollReply node discovery. sACN multicast join. UI integration.
+- **6.4 Cue foundation:** `CueStack`, `Cue`, `CuePlayhead`, `CuePlaybackRes`. Cue panel UI. JSON persistence to `show.json`.
+- Bevy 0.18 observer pattern used throughout (`On<Event>`, `commands.trigger()`).
+
+### 2026-05-08 — v0.2.0-phase6 plan drafted
+- Restructured PLAN.md with Table of Contents, ADRs, Phase Archive, and Phase 6
+- Added Cue System Architecture section
+- Updated dependency graph to reflect post-audit crate structure
+- Archived Phases 1–5; detailed audit findings moved to git history
+- Added success metrics table and profiling plan
+
+### 2026-05-08 — Phase 5 mid-point audit complete
+- 28 binding rules established (ADR-001 through ADR-012)
+- 56 UI audit items resolved
+- All P1/P2/P3 frontend fixes done
+- Zero compiler errors, zero warnings
+
+### 2026-05-05 — Phase 5 rendering fixes
+- FOH beam blackness (shader cone-angle mismatch)
+- Top/side ortho view beam visibility (perpendicular sprite cross)
+- Async file dialogs (background thread + channel)
+- Top-bar protocol pills wired to live I/O stats
+
+---
+
+*End of Plan*

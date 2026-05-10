@@ -1,11 +1,12 @@
 [package]
-name    = "stagelx-dmx"
+name    = "stagelx-show"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 stagelx-core  = { workspace = true }
 stagelx-patch = { workspace = true }
-stagelx-show  = { workspace = true }
+stagelx-gdtf  = { workspace = true }
 bevy          = { workspace = true }
-thiserror     = { workspace = true }
+serde         = { workspace = true }
+serde_json    = "1"

@@ -4,10 +4,11 @@ use bevy_egui::egui::{self, Color32, Pos2, Rect, RichText, Sense, Stroke, Stroke
 use crate::theme::*;
 use crate::widgets;
 use crate::{ActiveProtocol, IoPanelState};
+use stagelx_io::artnet::ArtNetNodeTable;
 use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
 use stagelx_io::midi::MidiTarget;
 use stagelx_io::stats::{ArtNetStats, MidiStats, OscStats, SacnStats, UsbStats};
-use stagelx_state::ProtocolStatus;
+use stagelx_show::ProtocolStatus;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DMX I/O Panel (docked / inline)
@@ -17,6 +18,7 @@ pub fn io_panel_docked(
     ui: &mut Ui,
     artnet_cfg: &mut ArtNetConfig,
     artnet_stats: &ArtNetStats,
+    artnet_nodes: &ArtNetNodeTable,
     sacn_cfg: &mut SacnConfig,
     sacn_stats: &SacnStats,
     usb_cfg: &mut UsbConfig,
@@ -81,7 +83,7 @@ pub fn io_panel_docked(
 
     // ── Active protocol config ────────────────────────────────────────────────
     match state.active_protocol {
-        ActiveProtocol::ArtNet => artnet_config(ui, artnet_cfg),
+        ActiveProtocol::ArtNet => artnet_config(ui, artnet_cfg, artnet_nodes),
         ActiveProtocol::Sacn => sacn_config(ui, sacn_cfg),
         ActiveProtocol::Usb => usb_config(ui, usb_cfg, usb_stats),
         ActiveProtocol::Midi => midi_config(ui, midi_cfg, midi_target),
@@ -148,7 +150,7 @@ fn config_row(ui: &mut Ui, label: &str, content: impl FnOnce(&mut Ui)) {
     });
 }
 
-fn artnet_config(ui: &mut Ui, cfg: &mut ArtNetConfig) {
+fn artnet_config(ui: &mut Ui, cfg: &mut ArtNetConfig, nodes: &ArtNetNodeTable) {
     config_row(ui, "Bind", |ui| {
         ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.ip).hint_text("0.0.0.0").text_color(FG));
     });
@@ -167,9 +169,28 @@ fn artnet_config(ui: &mut Ui, cfg: &mut ArtNetConfig) {
             ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut cfg.allowed_sources).hint_text("any").text_color(FG));
         });
     });
+    config_row(ui, "Discovery", |ui| {
+        let mut disc = cfg.discovery_enabled;
+        widgets::toggle(ui, &mut disc, "POLL");
+        cfg.discovery_enabled = disc;
+    });
 
-    // Live banner
-    widgets::banner(ui, widgets::DotState::Live, &format!("bound {}:6454 · 2 nodes seen", cfg.ip));
+    // Node list
+    if cfg.discovery_enabled && !nodes.nodes.is_empty() {
+        widgets::card(ui, |ui| {
+            widgets::eyebrow_widget(ui, &format!("Discovered Nodes ({})", nodes.nodes.len()));
+            ui.add_space(4.0);
+            for node in nodes.nodes.values() {
+                ui.horizontal(|ui| {
+                    widgets::status_dot(ui, widgets::DotState::Live);
+                    ui.label(RichText::new(&node.short_name).size(11.0).color(FG).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(node.ip.to_string()).size(9.0).monospace().color(FG_MUTED));
+                    });
+                });
+            }
+        });
+    }
 }
 
 fn sacn_config(ui: &mut Ui, cfg: &mut SacnConfig) {
@@ -192,6 +213,10 @@ fn sacn_config(ui: &mut Ui, cfg: &mut SacnConfig) {
     config_row(ui, "Dest", |ui| {
         ui.add_sized([160.0, 24.0], egui::TextEdit::singleline(&mut cfg.dest_ip).hint_text("239.255.X.X").text_color(FG));
         ui.label(RichText::new("multicast").size(10.0).monospace().color(FG_FAINT));
+    });
+    config_row(ui, "RX Univ", |ui| {
+        ui.add(egui::DragValue::new(&mut cfg.rx_universe).range(0_u16..=63999_u16));
+        ui.label(RichText::new("0 = same as out").size(10.0).monospace().color(FG_FAINT));
     });
 }
 

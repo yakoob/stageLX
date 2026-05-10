@@ -17,7 +17,7 @@ use crate::{
 /// Update frame time from Bevy's diagnostics store.
 pub fn track_frame_time(
     diagnostics: Res<DiagnosticsStore>,
-    mut perf: ResMut<stagelx_state::PerfDiagnosticsRes>,
+    mut perf: ResMut<stagelx_show::PerfDiagnosticsRes>,
 ) {
     if let Some(diag) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) {
         if let Some(m) = diag.measurements().last() {
@@ -30,7 +30,7 @@ pub fn track_frame_time(
 pub fn track_beam_counts(
     all_beams: Query<(), With<BeamCone>>,
     raymarched: Query<(), (With<BeamCone>, With<BeamLodTier>)>,
-    mut perf: ResMut<stagelx_state::PerfDiagnosticsRes>,
+    mut perf: ResMut<stagelx_show::PerfDiagnosticsRes>,
 ) {
     perf.beam_count = all_beams.iter().count();
     perf.beam_raymarch_count = raymarched.iter().count();
@@ -45,7 +45,7 @@ pub fn track_beam_counts(
 pub fn estimate_gpu_memory(
     meshes: Res<Assets<Mesh>>,
     mesh_query: Query<&Mesh3d>,
-    mut perf: ResMut<stagelx_state::PerfDiagnosticsRes>,
+    mut perf: ResMut<stagelx_show::PerfDiagnosticsRes>,
     mut cache: Local<std::collections::HashMap<AssetId<Mesh>, usize>>,
 ) {
     let mut total_bytes: usize = 0;

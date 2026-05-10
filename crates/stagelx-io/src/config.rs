@@ -19,6 +19,8 @@ pub struct ArtNetConfig {
     pub rx_enabled: bool,
     /// Comma-separated source IPs to accept for RX. Empty = accept all.
     pub allowed_sources: String,
+    /// Enable Art-Net node discovery (ArtPoll/ArtPollReply).
+    pub discovery_enabled: bool,
 }
 
 impl Default for ArtNetConfig {
@@ -29,6 +31,7 @@ impl Default for ArtNetConfig {
             dest_ip: String::new(),
             rx_enabled: false,
             allowed_sources: String::new(),
+            discovery_enabled: false,
         }
     }
 }
@@ -47,6 +50,8 @@ pub struct SacnConfig {
     pub priority: u8,
     /// Unicast destination IP for sACN TX. Empty = use multicast 239.255.X.X.
     pub dest_ip: String,
+    /// Universe to listen on for RX (for multicast join). 0 = same as out_universe.
+    pub rx_universe: u16,
 }
 
 impl Default for SacnConfig {
@@ -57,6 +62,7 @@ impl Default for SacnConfig {
             out_universe: 1,
             priority: 100,
             dest_ip: String::new(),
+            rx_universe: 0,
         }
     }
 }

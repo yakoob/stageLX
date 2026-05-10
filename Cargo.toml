@@ -3,7 +3,8 @@ members = [
     "crates/stagelx-core",
     "crates/stagelx-gdtf",
     "crates/stagelx-dmx",
-    "crates/stagelx-state",
+    "crates/stagelx-patch",
+    "crates/stagelx-show",
     "crates/stagelx-io",
     "crates/stagelx-render",
     "crates/stagelx-ui",
@@ -15,7 +16,8 @@ resolver = "2"
 stagelx-core   = { path = "crates/stagelx-core" }
 stagelx-gdtf   = { path = "crates/stagelx-gdtf" }
 stagelx-dmx    = { path = "crates/stagelx-dmx" }
-stagelx-state  = { path = "crates/stagelx-state" }
+stagelx-patch  = { path = "crates/stagelx-patch" }
+stagelx-show   = { path = "crates/stagelx-show" }
 stagelx-io     = { path = "crates/stagelx-io" }
 stagelx-render = { path = "crates/stagelx-render" }
 stagelx-ui     = { path = "crates/stagelx-ui" }
@@ -34,6 +36,7 @@ image             = { version = "0.25", default-features = false, features = ["p
 serialport        = "4"
 midir             = "0.9"
 rosc              = "0.5"
+socket2           = "0.5"
 tobj              = { version = "4", features = ["async"] }
 gltf              = "1"
 ufbx              = "0.10"
@@ -60,7 +63,8 @@ bevy_egui      = { workspace = true }
 stagelx-core   = { workspace = true }
 stagelx-gdtf   = { workspace = true }
 stagelx-dmx    = { workspace = true }
-stagelx-state  = { workspace = true }
+stagelx-patch  = { workspace = true }
+stagelx-show   = { workspace = true }
 stagelx-io     = { workspace = true }
 stagelx-render = { workspace = true }
 stagelx-ui     = { workspace = true }
