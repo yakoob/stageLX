@@ -12,11 +12,21 @@ use std::collections::HashSet;
 
 pub use stagelx_state::{
     DespawnFixtureEvent, FixtureLibraryRes, LoadVenueEvent, PatchEditState, PatchRes,
-    Programmer, SpawnFixtureEvent, VenueLoadState,
+    PerfDiagnosticsRes, Programmer, SpawnFixtureEvent, VenueLoadState,
 };
 use stagelx_io::config::{ArtNetConfig, MidiConfig, OscConfig, SacnConfig, UsbConfig};
 use stagelx_io::midi::MidiTarget;
 use stagelx_io::stats::{ArtNetStats, MidiStats, OscStats, SacnStats, UsbStats};
+use stagelx_state::ProtocolStatus;
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct IoStats<'w> {
+    artnet: Res<'w, ArtNetStats>,
+    sacn: Res<'w, SacnStats>,
+    usb: Res<'w, UsbStats>,
+    midi: Res<'w, MidiStats>,
+    osc: Res<'w, OscStats>,
+}
 use stagelx_core::types::FixtureId;
 
 use crate::theme::*;
@@ -314,6 +324,8 @@ fn ui_root_system(
     mut app_mode: ResMut<AppMode>,
     show_meta: Res<ShowMeta>,
     runtime_stats: Res<RuntimeStats>,
+    perf: Res<PerfDiagnosticsRes>,
+    io_stats: IoStats<'_>,
     mut fonts_installed: ResMut<FontsInstalled>,
     mut commands: Commands,
     windows: Query<&Window>,
@@ -430,16 +442,22 @@ fn ui_root_system(
                     ui.label(RichText::new(format!("FPS {:.1}", runtime_stats.fps)).size(10.0).monospace().color(FG_MUTED));
                     ui.add_space(14.0);
 
-                    // Protocol pills
-                    widgets::pill(ui, "OSC", Some(widgets::DotState::Live));
+                    // Protocol pills — linked to real I/O stats
+                    let artnet_dot = status_to_dot(io_stats.artnet.status);
+                    let sacn_dot   = status_to_dot(io_stats.sacn.status);
+                    let usb_dot    = status_to_dot(io_stats.usb.status);
+                    let midi_dot   = status_to_dot(io_stats.midi.status);
+                    let osc_dot    = status_to_dot(io_stats.osc.status);
+
+                    widgets::pill(ui, "OSC", Some(osc_dot));
                     ui.add_space(6.0);
-                    widgets::pill(ui, "MIDI", Some(widgets::DotState::Idle));
+                    widgets::pill(ui, "MIDI", Some(midi_dot));
                     ui.add_space(6.0);
-                    widgets::pill(ui, "USB", Some(widgets::DotState::Warn));
+                    widgets::pill(ui, "USB", Some(usb_dot));
                     ui.add_space(6.0);
-                    widgets::pill(ui, "sACN", Some(widgets::DotState::Live));
+                    widgets::pill(ui, "sACN", Some(sacn_dot));
                     ui.add_space(6.0);
-                    widgets::pill(ui, "Art-Net", Some(widgets::DotState::Live));
+                    widgets::pill(ui, "Art-Net", Some(artnet_dot));
                 });
             });
         });
@@ -524,7 +542,7 @@ fn ui_root_system(
             );
 
             // Viewport region (rendered as layout placeholders — actual 3D is underneath)
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(viewport_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(viewport_rect), |ui| {
                 let avail = ui.available_size();
                 let split_x = avail.x * 0.75;
                 let split_y = avail.y * 0.5;
@@ -562,6 +580,9 @@ fn ui_root_system(
                     font_hint(),
                     FG_FAINT,
                 );
+
+                // Performance HUD
+                draw_perf_hud(ui, &perf, foh_rect);
 
                 // TOP viewport — labels only; 3D renders underneath
                 let top_rect = Rect::from_min_size(
@@ -617,7 +638,7 @@ fn ui_root_system(
             });
 
             // Bottom strip: Patch + Library
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bottom_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(bottom_rect), |ui| {
                 ui.painter().rect_filled(bottom_rect, 0.0, BG_APP);
                 ui.painter().line_segment([Pos2::new(bottom_rect.min.x, bottom_rect.min.y), Pos2::new(bottom_rect.max.x, bottom_rect.min.y)], Stroke::new(1.0, BORDER));
                 let avail = ui.available_size();
@@ -625,7 +646,7 @@ fn ui_root_system(
 
                 // Patch panel
                 let patch_rect = Rect::from_min_size(bottom_rect.min, Vec2::new(patch_width, avail.y));
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(patch_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(patch_rect), |ui| {
                     ui.horizontal(|ui| {
                         ui.set_min_size(Vec2::new(ui.available_width(), 28.0));
                         ui.add_space(10.0);
@@ -662,7 +683,7 @@ fn ui_root_system(
                     Pos2::new(bottom_rect.min.x + patch_width, bottom_rect.min.y),
                     Vec2::new(avail.x - patch_width, avail.y),
                 );
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(lib_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(lib_rect), |ui| {
                     ui.painter().line_segment(
                         [Pos2::new(lib_rect.min.x, lib_rect.min.y), Pos2::new(lib_rect.min.x, lib_rect.max.y)],
                         Stroke::new(1.0, BORDER),
@@ -752,4 +773,50 @@ fn ui_root_system(
             });
     }
 
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Performance HUD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn draw_perf_hud(ui: &mut egui::Ui, perf: &PerfDiagnosticsRes, viewport: Rect) {
+    let lines = [
+        format!("Frame  {:.1} ms", perf.frame_time_ms),
+        format!("DMX    {:.2} ms  σ={:.2}", perf.dmx_tick_last_ms, perf.dmx_tick_std_dev_ms),
+        format!("Beams  {}  (raymarch {})", perf.beam_count, perf.beam_raymarch_count),
+        format!("GPU    {:.1} MB", perf.estimated_gpu_memory_mb),
+        format!("Spawn  {:.2} ms", perf.last_fixture_spawn_ms),
+    ];
+
+    let line_h = 13.0;
+    let pad = 6.0;
+    let w = 148.0;
+    let h = lines.len() as f32 * line_h + pad * 2.0;
+
+    let rect = Rect::from_min_size(
+        Pos2::new(viewport.max.x - w - 10.0, viewport.min.y + 10.0),
+        Vec2::new(w, h),
+    );
+
+    ui.painter().rect_filled(rect, 4.0, Color32::from_rgba_premultiplied(13, 15, 16, 200));
+    ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0, BORDER_SOFT), StrokeKind::Inside);
+
+    for (i, text) in lines.iter().enumerate() {
+        ui.painter().text(
+            Pos2::new(rect.min.x + pad, rect.min.y + pad + i as f32 * line_h),
+            egui::Align2::LEFT_TOP,
+            text,
+            font_hint(),
+            FG_MUTED,
+        );
+    }
+}
+
+fn status_to_dot(s: ProtocolStatus) -> widgets::DotState {
+    match s {
+        ProtocolStatus::Live => widgets::DotState::Live,
+        ProtocolStatus::Warn => widgets::DotState::Warn,
+        ProtocolStatus::Error => widgets::DotState::Error,
+        ProtocolStatus::Idle => widgets::DotState::Idle,
+    }
 }

@@ -287,15 +287,11 @@ fn read_case_insensitive<R: Read + Seek>(
     let target_lower = target.to_ascii_lowercase();
     let name = (0..archive.len())
         .find_map(|i| {
-            archive.by_index(i).ok().and_then(|f| {
-                if f.name().to_ascii_lowercase() == target_lower {
-                    Some(f.name().to_string())
-                } else {
-                    None
-                }
-            })
+            archive.by_index(i).ok().filter(|f| {
+                f.name().to_ascii_lowercase() == target_lower
+            }).map(|f| f.name().to_string())
         })
-        .ok_or_else(|| GdtfError::MissingField("GeneralSceneDescription.xml"))?;
+        .ok_or(GdtfError::MissingField("GeneralSceneDescription.xml"))?;
 
     let mut file = archive.by_name(&name)?;
     let mut content = String::new();

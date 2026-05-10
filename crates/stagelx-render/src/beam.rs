@@ -40,6 +40,11 @@ pub struct BeamMaterial {
     /// Ray-march step count. 16 = Tier 1, 32 = Tier 2.
     #[uniform(6)]
     pub step_count: i32,
+    /// Sorting bias injected into the transparent phase distance key.
+    /// Updated per-frame by `sort_beams_front_to_back` to achieve front-to-back
+    /// ordering (Bevy defaults to back-to-front for transparent meshes).
+    #[uniform(7)]
+    pub depth_bias: f32,
 }
 
 impl Material for BeamMaterial {
@@ -48,6 +53,9 @@ impl Material for BeamMaterial {
     }
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Add
+    }
+    fn depth_bias(&self) -> f32 {
+        self.depth_bias
     }
     fn specialize(
         _pipeline: &MaterialPipeline,

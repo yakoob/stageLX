@@ -1,10 +1,11 @@
 use bevy::{
     camera::{RenderTarget, Viewport, visibility::RenderLayers},
     prelude::*,
-    render::render_resource::{AsBindGroup, TextureFormat},
+    render::{camera::CameraRenderGraph, render_resource::{AsBindGroup, TextureFormat}},
     shader::ShaderRef,
     window::WindowResized,
 };
+use bevy::core_pipeline::core_3d::graph::Core3d;
 
 use std::collections::HashMap;
 
@@ -111,8 +112,12 @@ pub fn setup_beam_lod(
     });
 
     // Half-res beam camera (layer 1 only).
-    commands.spawn((
+    // Spawn CameraRenderGraph first to avoid the on_add hook warning on Camera.
+    let beam_cam = commands.spawn((
         BeamHalfResCamera,
+        CameraRenderGraph::new(Core3d),
+    )).id();
+    commands.entity(beam_cam).insert((
         Camera3d::default(),
         Camera {
             order: -1,
@@ -349,13 +354,66 @@ pub fn apply_beam_lod(
             };
         }
 
-        // Toggle matching sprite visibility.
+        // Toggle matching sprite visibility and render layers.
+        // Tier 0: sprite visible in FOH (layer 0) and ortho views (layer 2).
+        // Tier 1/2: sprite hidden in FOH but still visible in ortho views (layer 2).
         if let Some(&sprite_entity) = sprite_by_id.get(&cone.id) {
-            let sprite_vis = match tier {
-                BeamLodTier::Tier0 => Visibility::Visible,
-                BeamLodTier::Tier1 | BeamLodTier::Tier2 => Visibility::Hidden,
-            };
-            commands.entity(sprite_entity).insert(sprite_vis);
+            match tier {
+                BeamLodTier::Tier0 => {
+                    commands.entity(sprite_entity).insert(Visibility::Visible);
+                    commands.entity(sprite_entity).insert(RenderLayers::layer(0) | RenderLayers::layer(2));
+                }
+                BeamLodTier::Tier1 | BeamLodTier::Tier2 => {
+                    commands.entity(sprite_entity).insert(Visibility::Visible);
+                    commands.entity(sprite_entity).insert(RenderLayers::layer(2));
+                }
+            }
+        }
+    }
+}
+
+// ─── System: sort beams front-to-back for additive-phase early-Z ──────────────
+
+/// Updates each beam material's `depth_bias` so that Bevy's transparent-phase
+/// ascending sort renders closer beams first (front-to-back).
+///
+/// Bevy defaults to back-to-front for all transparent meshes. For additive
+/// blending this is sub-optimal because it maximizes overdraw. Front-to-back
+/// lets the GPU's early-z reject beam fragments occluded by opaque venue
+/// geometry sooner.
+///
+/// The bias is only written when it changes by more than `BIAS_EPSILON` to
+/// avoid marking material assets dirty every frame.
+const BIAS_EPSILON: f32 = 0.5;
+
+pub fn sort_beams_front_to_back(
+    foh_q: Query<&Transform, With<FohCamera>>,
+    beam_q: Query<(&MeshMaterial3d<BeamMaterial>, &GlobalTransform), With<BeamCone>>,
+    mut beam_materials: ResMut<Assets<BeamMaterial>>,
+    mut last_bias: Local<HashMap<AssetId<BeamMaterial>, f32>>,
+) {
+    let Ok(foh_tf) = foh_q.single() else { return };
+    let cam_pos = foh_tf.translation;
+    let cam_forward: Vec3 = foh_tf.forward().into();
+
+    for (mat_handle, global_tf) in &beam_q {
+        let beam_pos = global_tf.translation();
+        // view_z matches the sign convention of Bevy's ViewRangefinder3d:
+        // negative = in front of camera, positive = behind.
+        let view_z = (beam_pos - cam_pos).dot(cam_forward);
+        let desired_bias = -2.0 * view_z;
+
+        let id = mat_handle.id();
+        let should_update = last_bias
+            .get(&id)
+            .map(|&last| (desired_bias - last).abs() > BIAS_EPSILON)
+            .unwrap_or(true);
+
+        if should_update {
+            if let Some(mat) = beam_materials.get_mut(id) {
+                mat.depth_bias = desired_bias;
+            }
+            last_bias.insert(id, desired_bias);
         }
     }
 }

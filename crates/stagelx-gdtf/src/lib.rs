@@ -1,9 +1,11 @@
 pub mod error;
 pub mod gdtf;
 pub mod mvr;
+pub mod mvr_export;
 
 pub use gdtf::{parse_gdtf, GdtfFixtureType};
 pub use mvr::{parse_mvr, MvrScene};
+pub use mvr_export::export_mvr;
 
 use std::collections::HashMap;
 
@@ -11,6 +13,9 @@ use std::collections::HashMap;
 #[derive(Default)]
 pub struct FixtureLibrary {
     fixtures: HashMap<String, GdtfFixtureType>,
+    /// Original GDTF ZIP bytes for each fixture type, keyed by FixtureTypeID.
+    /// Kept so that MVR export can re-embed the fixture definitions.
+    gdtf_raw_bytes: HashMap<String, Vec<u8>>,
 }
 
 impl FixtureLibrary {
@@ -19,6 +24,7 @@ impl FixtureLibrary {
         let fixture = parse_gdtf(data)?;
         let id = fixture.fixture_type_id.clone();
         self.fixtures.insert(id.clone(), fixture);
+        self.gdtf_raw_bytes.insert(id.clone(), data.to_vec());
         Ok(id)
     }
 
@@ -36,5 +42,10 @@ impl FixtureLibrary {
 
     pub fn is_empty(&self) -> bool {
         self.fixtures.is_empty()
+    }
+
+    /// Retrieve the original GDTF ZIP bytes for a given fixture type ID.
+    pub fn raw_bytes(&self, id: &str) -> Option<&[u8]> {
+        self.gdtf_raw_bytes.get(id).map(|v| v.as_slice())
     }
 }

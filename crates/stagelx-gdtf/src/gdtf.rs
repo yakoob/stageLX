@@ -48,8 +48,7 @@ impl DmxChannel {
     /// Map a raw 8-bit value (or MSB of a 16-bit value) to a 0.0–1.0 ratio.
     pub fn normalize(&self, msb: u8, lsb: u8) -> f32 {
         if self.resolution >= 2 {
-            let raw = ((msb as u32) << 8 | lsb as u32) as f32 / 65535.0;
-            raw
+            ((msb as u32) << 8 | lsb as u32) as f32 / 65535.0
         } else {
             msb as f32 / 255.0
         }

@@ -1,4 +1,4 @@
-use bevy::{prelude::*, camera::{ScalingMode, Viewport}, window::WindowResized};
+use bevy::{prelude::*, camera::{ScalingMode, Viewport, visibility::RenderLayers}, window::WindowResized};
 use crate::camera::FohCameraController;
 
 #[derive(Component)]
@@ -113,6 +113,7 @@ pub fn setup_scene(
             },
             ..OrthographicProjection::default_3d()
         }),
+        RenderLayers::layer(0) | RenderLayers::layer(2),
         // Positioned straight above; Z is "up" in this 2-D view (stage depth)
         Transform::from_xyz(0.0, 40.0, 0.0).looking_at(Vec3::ZERO, Vec3::Z),
     ));
@@ -132,6 +133,7 @@ pub fn setup_scene(
             },
             ..OrthographicProjection::default_3d()
         }),
+        RenderLayers::layer(0) | RenderLayers::layer(2),
         Transform::from_xyz(40.0, 3.0, 0.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y),
     ));
 

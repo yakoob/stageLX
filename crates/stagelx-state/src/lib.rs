@@ -35,6 +35,8 @@ pub struct DespawnFixtureEvent(pub FixtureId);
 #[derive(Event, Debug, Clone)]
 pub struct LoadVenueEvent {
     pub path: String,
+    /// World-space offset applied to the venue root after loading (metres).
+    pub offset: [f32; 3],
 }
 
 // ─── Programmer ───────────────────────────────────────────────────────────────
@@ -116,6 +118,8 @@ pub struct FixtureLibraryRes {
 pub struct VenueLoadState {
     pub import_path: String,
     pub import_error: Option<String>,
+    /// World-space offset applied to the loaded venue (metres, Bevy coords).
+    pub offset: [f32; 3],
 }
 
 // ─── ProtocolStatus ───────────────────────────────────────────────────────────
@@ -127,4 +131,69 @@ pub enum ProtocolStatus {
     Live,
     Warn,
     Error,
+}
+
+// ─── Performance Diagnostics ──────────────────────────────────────────────────
+
+/// Running performance metrics collected across subsystems.
+/// Written by render / IO / DMX crates; read by the UI for the performance HUD.
+#[derive(Resource, Debug)]
+pub struct PerfDiagnosticsRes {
+    /// DMX tick: number of ticks sampled.
+    pub dmx_tick_count: u64,
+    /// DMX tick: running mean (ms).
+    pub dmx_tick_mean_ms: f32,
+    /// DMX tick: M2 accumulator for Welford's algorithm.
+    dmx_tick_m2: f64,
+    /// DMX tick: sample standard deviation (ms).
+    pub dmx_tick_std_dev_ms: f32,
+    /// DMX tick: duration of the last tick (ms).
+    pub dmx_tick_last_ms: f32,
+    /// Number of beams in the scene.
+    pub beam_count: usize,
+    /// Number of beams in Tier 1 + Tier 2 (ray-marched).
+    pub beam_raymarch_count: usize,
+    /// Estimated GPU memory for all venue + fixture geometry (MB).
+    pub estimated_gpu_memory_mb: f32,
+    /// CPU frame time from Bevy diagnostics (ms).
+    pub frame_time_ms: f32,
+    /// Duration of the most recent fixture spawn (ms).
+    pub last_fixture_spawn_ms: f32,
+    /// Total fixtures spawned since app start.
+    pub fixtures_spawned: u64,
+}
+
+impl Default for PerfDiagnosticsRes {
+    fn default() -> Self {
+        Self {
+            dmx_tick_count: 0,
+            dmx_tick_mean_ms: 0.0,
+            dmx_tick_m2: 0.0,
+            dmx_tick_std_dev_ms: 0.0,
+            dmx_tick_last_ms: 0.0,
+            beam_count: 0,
+            beam_raymarch_count: 0,
+            estimated_gpu_memory_mb: 0.0,
+            frame_time_ms: 0.0,
+            last_fixture_spawn_ms: 0.0,
+            fixtures_spawned: 0,
+        }
+    }
+}
+
+impl PerfDiagnosticsRes {
+    /// Record a new DMX tick duration using Welford's online algorithm.
+    pub fn record_dmx_tick(&mut self, duration_ms: f32) {
+        self.dmx_tick_count += 1;
+        self.dmx_tick_last_ms = duration_ms;
+        let n = self.dmx_tick_count as f64;
+        let x = duration_ms as f64;
+        let delta = x - self.dmx_tick_mean_ms as f64;
+        self.dmx_tick_mean_ms = (self.dmx_tick_mean_ms as f64 + delta / n) as f32;
+        let delta2 = x - self.dmx_tick_mean_ms as f64;
+        self.dmx_tick_m2 += delta * delta2;
+        if self.dmx_tick_count > 1 {
+            self.dmx_tick_std_dev_ms = (self.dmx_tick_m2 / (n - 1.0)).sqrt() as f32;
+        }
+    }
 }

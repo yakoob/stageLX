@@ -1,13 +1,20 @@
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
+use bevy::core_pipeline::core_3d::graph::Core3d;
+use bevy::log::LogPlugin;
+use bevy::render::camera::CameraRenderGraph;
 use bevy_egui::{EguiContext, EguiGlobalSettings, EguiPlugin, PrimaryEguiContext};
 use stagelx_io::IoPlugin;
 use stagelx_render::StageLxRenderPlugin;
 use stagelx_ui::StageLxUiPlugin;
 
 fn setup_ui_camera(mut commands: Commands) {
-    commands.spawn((
+    // Spawn CameraRenderGraph first to avoid the Camera on_add hook warning.
+    let cam = commands.spawn((
+        CameraRenderGraph::new(Core3d),
         Camera3d::default(),
+    )).id();
+    commands.entity(cam).insert((
         Camera {
             order: 100,
             clear_color: ClearColorConfig::Custom(Color::NONE),
@@ -23,7 +30,10 @@ fn setup_ui_camera(mut commands: Commands) {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(DefaultPlugins.set(LogPlugin {
+            filter: "warn,bevy_render::camera=error".to_string(),
+            ..default()
+        }).set(WindowPlugin {
             primary_window: Some(Window {
                 title: "stageLX — Phase 5".into(),
                 resolution: (1440_u32, 900_u32).into(),

@@ -251,7 +251,7 @@ MVR files extend this with scene context:
 - [x] HTP merge across input sources via `DmxEngine` priority stack
 - [x] Universe/port configuration UI (DMX I/O egui panel)
 - [x] Security: source IP allowlist, universe cap (64), configurable TX destinations
-- [ ] USB DMX output (Enttec USB Pro) — deferred to Phase 4
+- [x] USB DMX output (Enttec USB Pro) — deferred to Phase 4 — ✅ completed in Phase 4
 
 **Milestone**: Receive Art-Net or sACN from a console, visualize result, simultaneously output both protocols. ✅
 
@@ -267,9 +267,9 @@ MVR files extend this with scene context:
 - [x] Observer-based fixture lifecycle (`On<SpawnFixtureEvent>` / `On<DespawnFixtureEvent>`)
 - [x] GDTF-driven DMX channel mapping (pan/tilt/dimmer/colour from channel offsets)
 - [x] Patch add-fixture UI (GDTF type + mode selector, universe/channel form)
-- [ ] Wire 3DS geometry → actual Bevy mesh in renderer (parser done, render hookup deferred)
-- [ ] MVR export (scene + patch → `.mvr` file) — deferred to Phase 5
-- [ ] Truss / structure geometry from MVR — deferred to Phase 5
+- [x] Wire 3DS geometry → actual Bevy mesh in renderer (parser done, render hookup deferred) — ✅ `mesh_from_gdtf` wired in `on_fixture_spawned`
+- [x] MVR export (scene + patch → `.mvr` file) — deferred to Phase 5 — ✅ `export_mvr` in `stagelx-gdtf`, UI button in Library MVR tab
+- [ ] Truss / structure geometry from MVR — deferred to Phase 6
 
 **Milestone**: MVR import places fixtures from real show files; USB DMX output to Enttec dongles. ✅
 
@@ -373,6 +373,10 @@ Output of a structured Performance vs Architect role-debate. These are binding d
 | Patch load total | < 2 s wall-clock for 500 fixtures / 50 models |
 | GPU geometry memory | ≤ 128 MB for 500-fixture rig |
 | `stagelx-state` growth | 0 new Resources added in Phase 5 |
+| File-dialog freeze | Background thread + channel (no main-thread block) | ✅ |
+| Top-bar I/O pills | Real-time `ProtocolStatus` from `*Stats` resources | ✅ |
+| FOH beam blackness | `beam_params.x` uses base half-angle in shader | ✅ |
+| Ortho view beams | Perpendicular sprite cross (`BeamSprite` + `BeamSpriteTop`) on layer 2 | ✅ |
 
 ---
 
@@ -463,15 +467,15 @@ Items 1–4 are under 45 minutes combined and must be done before any show call.
 | 3 | Remove `tokio` workspace dep (Rule 17) | `Cargo.toml:27` | 5 min | ✅ |
 | 4 | Add `[profile.release]` with LTO (Rule 16) | `Cargo.toml` | 5 min | ✅ |
 | 5 | Split `IoConfig` into per-protocol `*Config` + `*Stats` (Rules 22 + 4) | `state/src/lib.rs:107–219`, IO crates | 1 day | ✅ |
-| 6 | Gate `articulate_beams` on `Changed<GlobalTransform>` (Rule 14) | `render/src/fixture.rs:303` | 2 h | |
+| 6 | Gate `articulate_beams` on `Changed<GlobalTransform>` (Rule 14) | `render/src/fixture.rs:303` | 2 h | ✅ |
 | 7 | `[u8; 512]` on `ReceivedPacket` (Rule 11) | `artnet.rs:141`, `sacn.rs:188` | 30 min | ✅ |
 | 8 | Move `programmer_to_dmx` to `stagelx-dmx` + `DmxChannelMap` cache (Rule 20) | `artnet.rs:228–306` → `dmx/src/projection.rs` | 4 h | ✅ |
 | 9 | Move `VenueLoadState` to `stagelx-state` (Rule 21) | `ui/src/lib.rs:17,108` | 1 h | ✅ |
-| 10 | Implement `IoSource` for Art-Net/sACN/OSC; wire `rx_drops` (Rule 3 + 10) | `supervisor.rs`, transports | 1 day | 🔲 |
-| 11 | `Local<Vec>` + `Local<HashMap>` in LOD systems (Rule 13) | `lod.rs:209`, `lod.rs:267` | 2 h | |
-| 12 | Cache universe ID list in `DmxEngine` with dirty flag (Rule 13) | `engine.rs:51` | 1 h | |
-| 13 | LOD hysteresis ±10 px (Rule 18) | `lod.rs:225` | 1 h | |
-| 14 | Resize `BeamRenderTarget` on `WindowResized` (Rule 19) | `lod.rs:84` | 1 h | |
+| 10 | Implement `IoSource` for Art-Net/sACN/OSC; wire `rx_drops` (Rule 3 + 10) | `supervisor.rs`, transports | 1 day | 🔲 — deferred to Phase 6 |
+| 11 | `Local<Vec>` + `Local<HashMap>` in LOD systems (Rule 13) | `lod.rs:209`, `lod.rs:267` | 2 h | ✅ |
+| 12 | Cache universe ID list in `DmxEngine` with dirty flag (Rule 13) | `engine.rs:51` | 1 h | ✅ |
+| 13 | LOD hysteresis ±10 px (Rule 18) | `lod.rs:225` | 1 h | ✅ |
+| 14 | Resize `BeamRenderTarget` on `WindowResized` (Rule 19) | `lod.rs:84` | 1 h | ✅ |
 | 15 | Rate-limit MIDI port scan to 1 Hz (Rule 15) | `midi.rs:34` | 15 min | ✅ |
 
 ---
@@ -586,15 +590,15 @@ Output of a Frontend role analysis comparing the live `stagelx-ui` implementatio
 
 ---
 
-### Phase 5 — Geometry, I/O Surfaces + Advanced Rendering (Weeks 17–20)
+### Phase 5 — Geometry, I/O Surfaces + Advanced Rendering (Weeks 17–20) ✅ Complete
 **Goal**: Real fixture/venue geometry, full input surface coverage, professional rendering.
 
 **Geometry loading**
 - [x] OBJ venue loader (`tobj` → Bevy mesh) — ✅ already existed
 - [x] glTF/GLB venue loader (`gltf` crate → Bevy mesh) — ✅ already existed
 - [x] FBX venue loader (`ufbx` crate → Bevy mesh, triangulated) — ✅ added 2026-05-08
-- [ ] Wire `ds3::to_bevy_buffers()` into `on_fixture_spawned` (real GDTF models, cuboid fallback)
-- [ ] "Scene Assets" UI section: load venue files, place at configurable world offset
+- [x] Wire `ds3::to_bevy_buffers()` into `on_fixture_spawned` (real GDTF models, cuboid fallback) — ✅ done earlier
+- [x] "Scene Assets" UI section: load venue files, place at configurable world offset — ✅ `VenueLoadState::offset` + X/Y/Z DragValues in Venue tab, wired through `LoadVenueEvent` to venue root transform
 
 **I/O surfaces**
 - [x] MIDI input: `midir` callback → crossbeam → Bevy; CC → global Programmer or selected fixtures via `MidiTarget`
@@ -602,16 +606,16 @@ Output of a Frontend role analysis comparing the live `stagelx-ui` implementatio
 - [x] MIDI + OSC config UI (device selector, port, CC mapping table, target mode toggle)
 
 **MVR export** (deferred from Phase 4)
-- [ ] Write `GeneralSceneDescription.xml` from current patch + library
-- [ ] Package GDTFs + XML into ZIP → save `.mvr` file
+- [x] Write `GeneralSceneDescription.xml` from current patch + library — ✅ `mvr_export::export_mvr`
+- [x] Package GDTFs + XML into ZIP → save `.mvr` file — ✅ ZIP writer with embedded GDTFs
 
 **Rendering upgrades**
 - [x] Ray-marched volumetric fog cone in `BeamMaterial` WGSL shader (march view ray through cone volume, accumulate density)
 - [x] Three-tier LOD: Tier 0 billboard sprite, Tier 1 half-res offscreen (16 steps), Tier 2 full-res (32 steps)
 - [x] Hard cap 64 simultaneous ray-marched beams
 - [x] Dynamic step count uniform in beam shader
-- [ ] Front-to-back beam sorting (deferred to profiling phase)
-- [ ] Split-screen viewports: primary FOH perspective (3/4 width) + top ortho + side ortho
+- [x] Front-to-back beam sorting (deferred to profiling phase) — ✅ `sort_beams_front_to_back` system; `BeamMaterial::depth_bias` negates view-space Z for ascending front-to-back order; 0.5 epsilon to avoid per-frame asset dirty
+- [x] Split-screen viewports: primary FOH perspective (3/4 width) + top ortho + side ortho — ✅ done earlier (commit `2dc1d79`)
 - [x] Camera orbit/pan for FOH view; fixed orthographic cameras for top/side
 
 **Milestone**: Load a real venue GLB, import an MVR with GDTF fixture models, control from a MIDI surface or OSC (TouchDesigner), see volumetric beams in three views simultaneously.
@@ -661,4 +665,4 @@ Suggested `.gitignore`: standard Rust gitignore + `*.gdtf` test files (large bin
 
 ---
 
-*Last updated: 2026-05-08 — Phase 5 mid-point audit complete; frontend UI review complete; Rules 10–28 added; IoConfig split (Rule 22), thread shutdown (Rule 12), MIDI/OSC per-fixture routing, FBX venue loader completed*
+*Last updated: 2026-05-10 — Phase 5 rendering fixes: FOH beam blackness (shader cone-angle mismatch), top/side ortho view beam visibility (perpendicular sprite cross + dedicated render layer), async file dialogs (background thread + channel), top-bar protocol pills wired to live I/O stats, runtime query conflict fix, camera render-graph warning suppression.*

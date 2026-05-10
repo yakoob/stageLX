@@ -268,8 +268,15 @@ pub fn artnet_receive(
 
 /// Merge all DMX sources into the output universe set.
 /// Must run after programmer_to_dmx and artnet_receive, before the send systems.
-pub fn dmx_engine_tick(mut engine: ResMut<DmxEngineRes>) {
+pub fn dmx_engine_tick(
+    mut engine: ResMut<DmxEngineRes>,
+    mut perf: Option<ResMut<stagelx_state::PerfDiagnosticsRes>>,
+) {
+    let start = std::time::Instant::now();
     engine.0.tick();
+    if let Some(ref mut p) = perf {
+        p.record_dmx_tick(start.elapsed().as_secs_f32() * 1000.0);
+    }
 }
 
 /// Send Art-Net output for the configured universe.

@@ -281,7 +281,7 @@ fn midi_config(ui: &mut Ui, cfg: &mut MidiConfig, target: &MidiTarget) {
                 Pos2::new(rect.max.x - dv_w - 4.0, rect.min.y + 2.0),
                 Vec2::new(dv_w, 20.0),
             );
-            col.allocate_new_ui(egui::UiBuilder::new().max_rect(dv_rect), |ui| {
+            col.scope_builder(egui::UiBuilder::new().max_rect(dv_rect), |ui| {
                 ui.add(egui::DragValue::new(*val).range(0_u8..=127_u8));
             });
             col.add_space(4.0);

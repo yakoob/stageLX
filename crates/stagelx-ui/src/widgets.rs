@@ -687,7 +687,7 @@ pub fn dropzone(ui: &mut Ui, label: &str, hint: &str) -> bool {
         Vec2::new(60.0, 24.0),
     );
     let mut clicked = false;
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(btn_rect), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(btn_rect), |ui| {
         if ui.add_sized([60.0, 24.0], egui::Button::new("Browse").fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).clicked() {
             clicked = true;
         }

@@ -212,7 +212,7 @@ pub fn programmer_panel_docked(
             egui::Vec2::new(40.0, 22.0),
         );
         let mut pick_clicked = false;
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(pick_rect), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(pick_rect), |ui| {
             if ui.add_sized([40.0, 22.0], egui::Button::new(RichText::new("PICK").size(9.0).color(FG_SECONDARY)).fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).clicked() {
                 pick_clicked = true;
             }

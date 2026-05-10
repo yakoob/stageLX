@@ -24,8 +24,10 @@ pub struct VenueRoot;
 
 /// Read a venue file from `path` and spawn it.
 /// Replaces any previously loaded venue.
+/// `offset` is applied to the root transform (metres, Bevy coords).
 pub fn load_venue(
     path: &str,
+    offset: [f32; 3],
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -38,11 +40,11 @@ pub fn load_venue(
 
     let lower = path.to_lowercase();
     if lower.ends_with(".obj") {
-        load_obj(path, commands, meshes, materials)
+        load_obj(path, offset, commands, meshes, materials)
     } else if lower.ends_with(".glb") || lower.ends_with(".gltf") {
-        load_glb(path, commands, meshes, materials)
+        load_glb(path, offset, commands, meshes, materials)
     } else if lower.ends_with(".fbx") {
-        load_fbx(path, commands, meshes, materials)
+        load_fbx(path, offset, commands, meshes, materials)
     } else {
         Err(format!("Unsupported format — use .obj, .glb/.gltf, or .fbx (got '{}')", path))
     }
@@ -52,6 +54,7 @@ pub fn load_venue(
 
 fn load_obj(
     path: &str,
+    offset: [f32; 3],
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -60,7 +63,7 @@ fn load_obj(
         .map_err(|e| format!("OBJ load error: {e}"))?;
 
     let venue = commands.spawn((
-        Transform::default(),
+        Transform::from_xyz(offset[0], offset[1], offset[2]),
         Visibility::default(),
         VenueRoot,
     )).id();
@@ -114,6 +117,7 @@ fn load_obj(
 
 fn load_glb(
     path: &str,
+    offset: [f32; 3],
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -122,7 +126,7 @@ fn load_glb(
         .map_err(|e| format!("glTF load error: {e}"))?;
 
     let venue = commands.spawn((
-        Transform::default(),
+        Transform::from_xyz(offset[0], offset[1], offset[2]),
         Visibility::default(),
         VenueRoot,
     )).id();
@@ -181,6 +185,7 @@ fn load_glb(
 
 fn load_fbx(
     path: &str,
+    offset: [f32; 3],
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -192,7 +197,7 @@ fn load_fbx(
         .map_err(|e| format!("FBX load error: {} — {}", e.description, e.info()))?;
 
     let venue = commands.spawn((
-        Transform::default(),
+        Transform::from_xyz(offset[0], offset[1], offset[2]),
         Visibility::default(),
         VenueRoot,
     )).id();

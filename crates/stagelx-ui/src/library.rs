@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Pos2, RichText, Stroke, Ui, Vec2};
-use stagelx_gdtf::parse_mvr;
+use stagelx_gdtf::{parse_mvr, export_mvr};
 use crate::VenueLoadState;
+use std::sync::{Arc, Mutex};
 
 use crate::theme::*;
 use crate::widgets;
@@ -135,10 +136,18 @@ fn fixtures_tab(
                 });
         });
 
+    let gdtf_dialog_id = ui.id().with("gdtf_file_dialog");
     if widgets::dropzone(ui, "Import GDTF", ".gdtf · browse or type path below") {
-        if let Some(path) = rfd::FileDialog::new().add_filter("GDTF", &["gdtf"]).pick_file() {
-            res.import_path = path.to_string_lossy().to_string();
-            load_gdtf(res);
+        let pending = PendingDialog::new(|| rfd::FileDialog::new().add_filter("GDTF", &["gdtf"]).pick_file());
+        ui.ctx().data_mut(|d| d.insert_temp(gdtf_dialog_id, pending));
+    }
+    if let Some(pending) = ui.ctx().data_mut(|d| d.get_temp::<PendingDialog>(gdtf_dialog_id)) {
+        if let Some(result) = pending.try_take() {
+            ui.ctx().data_mut(|d| d.remove_temp::<PendingDialog>(gdtf_dialog_id));
+            if let Some(path) = result {
+                res.import_path = path;
+                load_gdtf(res);
+            }
         }
     }
     ui.horizontal(|ui| {
@@ -185,10 +194,18 @@ fn mvr_tab(
         });
     });
 
+    let mvr_dialog_id = ui.id().with("mvr_file_dialog");
     if widgets::dropzone(ui, "Import MVR", "loads embedded GDTFs and populates patch") {
-        if let Some(path) = rfd::FileDialog::new().add_filter("MVR", &["mvr"]).pick_file() {
-            res.mvr_import_path = path.to_string_lossy().to_string();
-            load_mvr(res, patch, commands);
+        let pending = PendingDialog::new(|| rfd::FileDialog::new().add_filter("MVR", &["mvr"]).pick_file());
+        ui.ctx().data_mut(|d| d.insert_temp(mvr_dialog_id, pending));
+    }
+    if let Some(pending) = ui.ctx().data_mut(|d| d.get_temp::<PendingDialog>(mvr_dialog_id)) {
+        if let Some(result) = pending.try_take() {
+            ui.ctx().data_mut(|d| d.remove_temp::<PendingDialog>(mvr_dialog_id));
+            if let Some(path) = result {
+                res.mvr_import_path = path;
+                load_mvr(res, patch, commands);
+            }
         }
     }
     ui.horizontal(|ui| {
@@ -204,6 +221,47 @@ fn mvr_tab(
     if let Some(ref err) = res.mvr_import_error.clone() {
         ui.label(error_text(err));
     }
+
+    ui.add_space(12.0);
+
+    // ── Export MVR ────────────────────────────────────────────────────────────
+    let export_status_id = ui.id().with("mvr_export_status");
+    let mut export_status: Option<String> = ui.ctx().data_mut(|d| d.get_temp(export_status_id));
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Export").size(11.0).strong().color(FG_MUTED));
+    });
+    let mvr_save_dialog_id = ui.id().with("mvr_save_dialog");
+    if ui.add_sized([available_width, 28.0], egui::Button::new(RichText::new("💾  Export current patch to MVR").size(11.0).color(FG)).fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).clicked() {
+        let pending = PendingDialog::new(|| rfd::FileDialog::new().add_filter("MVR", &["mvr"]).save_file());
+        ui.ctx().data_mut(|d| d.insert_temp(mvr_save_dialog_id, pending));
+    }
+    if let Some(pending) = ui.ctx().data_mut(|d| d.get_temp::<PendingDialog>(mvr_save_dialog_id)) {
+        if let Some(result) = pending.try_take() {
+            ui.ctx().data_mut(|d| d.remove_temp::<PendingDialog>(mvr_save_dialog_id));
+            if let Some(path) = result {
+                let fixtures: Vec<_> = patch.0.fixtures().collect();
+                if fixtures.is_empty() {
+                    export_status = Some("No fixtures in patch to export.".into());
+                } else {
+                    let fixture_refs: Vec<_> = fixtures.iter().map(|f| *f).collect();
+                    match export_mvr(&fixture_refs, |id| res.library.raw_bytes(id).map(|b| b.to_vec()), "stageLX Export") {
+                        Ok(bytes) => {
+                            match std::fs::write(&path, &bytes) {
+                                Ok(_) => export_status = Some(format!("Saved to {}", path)),
+                                Err(e) => export_status = Some(format!("Write error: {e}")),
+                            }
+                        }
+                        Err(e) => export_status = Some(format!("Export error: {e}")),
+                    }
+                }
+            }
+        }
+    }
+    if let Some(status) = &export_status {
+        ui.label(RichText::new(status).size(10.0).color(if status.starts_with("Saved") { ACCENT } else { ERROR }));
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(export_status_id, export_status));
 }
 
 fn venue_tab(
@@ -234,9 +292,33 @@ fn venue_tab(
         });
     });
 
+    // World offset controls
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("World Offset").size(10.0).monospace().color(FG_MUTED));
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("X").size(10.0).monospace().color(FG_MUTED));
+        ui.add(egui::DragValue::new(&mut venue_state.offset[0]).suffix(" m").speed(0.1));
+        ui.label(RichText::new("Y").size(10.0).monospace().color(FG_MUTED));
+        ui.add(egui::DragValue::new(&mut venue_state.offset[1]).suffix(" m").speed(0.1));
+        ui.label(RichText::new("Z").size(10.0).monospace().color(FG_MUTED));
+        ui.add(egui::DragValue::new(&mut venue_state.offset[2]).suffix(" m").speed(0.1));
+    });
+
+    ui.add_space(8.0);
+
+    let venue_dialog_id = ui.id().with("venue_file_dialog");
     if widgets::dropzone(ui, "Replace Venue", "OBJ · GLB · glTF · FBX") {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Venue", &["obj", "glb", "gltf", "fbx"]).pick_file() {
-            commands.trigger(LoadVenueEvent { path: path.to_string_lossy().to_string() });
+        let pending = PendingDialog::new(|| rfd::FileDialog::new().add_filter("Venue", &["obj", "glb", "gltf", "fbx"]).pick_file());
+        ui.ctx().data_mut(|d| d.insert_temp(venue_dialog_id, pending));
+    }
+    if let Some(pending) = ui.ctx().data_mut(|d| d.get_temp::<PendingDialog>(venue_dialog_id)) {
+        if let Some(result) = pending.try_take() {
+            ui.ctx().data_mut(|d| d.remove_temp::<PendingDialog>(venue_dialog_id));
+            if let Some(path) = result {
+                let offset = venue_state.offset;
+                commands.trigger(LoadVenueEvent { path, offset });
+            }
         }
     }
     ui.horizontal(|ui| {
@@ -249,13 +331,36 @@ fn venue_tab(
             if path.is_empty() {
                 venue_state.import_error = Some("Please enter a file path.".into());
             } else {
-                commands.trigger(LoadVenueEvent { path });
+                let offset = venue_state.offset;
+                commands.trigger(LoadVenueEvent { path, offset });
             }
         }
     });
 
     if let Some(ref err) = venue_state.import_error.clone() {
         ui.label(error_text(err));
+    }
+}
+
+/// Async file dialog helper. Spawned on a background thread so the UI doesn't freeze.
+#[derive(Clone, Default)]
+struct PendingDialog {
+    result: Arc<Mutex<Option<Option<String>>>>,
+}
+
+impl PendingDialog {
+    fn new(pick_fn: impl FnOnce() -> Option<std::path::PathBuf> + Send + 'static) -> Self {
+        let result = Arc::new(Mutex::new(None));
+        let result_clone = result.clone();
+        std::thread::spawn(move || {
+            *result_clone.lock().unwrap() = Some(pick_fn().map(|p| p.to_string_lossy().to_string()));
+        });
+        Self { result }
+    }
+
+    /// Returns `None` if still pending, `Some(None)` if cancelled, `Some(Some(path))` if selected.
+    fn try_take(&self) -> Option<Option<String>> {
+        self.result.lock().unwrap().take()
     }
 }
 

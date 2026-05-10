@@ -1,8 +1,9 @@
 use bevy::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use stagelx_core::types::FixtureId;
 use stagelx_state::{FixtureLibraryRes, PatchRes, Programmer, SpawnFixtureEvent, DespawnFixtureEvent};
 use crate::beam::{BeamMaterial, GoboLibrary, build_beam_cone};
-use crate::beam_sprite::{BeamSprite, BeamSpriteMaterial, build_beam_sprite_quad};
+use crate::beam_sprite::{BeamSprite, BeamSpriteTop, BeamSpriteMaterial, build_beam_sprite_quad};
 
 const BEAM_HEIGHT: f32 = 18.0;
 const LENS_OFFSET: f32 = 0.14;
@@ -80,7 +81,9 @@ pub fn on_fixture_spawned(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
     mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
+    mut perf: Option<ResMut<stagelx_state::PerfDiagnosticsRes>>,
 ) {
+    let start = std::time::Instant::now();
     let id = trigger.event().0;
     let Some(inst) = patch.0.get(id) else { return };
 
@@ -116,6 +119,11 @@ pub fn on_fixture_spawned(
         FixtureSpawnConfig { id, position, suspended: true, pan_range, tilt_range, beam_angle_deg, body_mesh },
         open_gobo,
     );
+
+    if let Some(ref mut p) = perf {
+        p.last_fixture_spawn_ms = start.elapsed().as_secs_f32() * 1000.0;
+        p.fixtures_spawned += 1;
+    }
 }
 
 /// Observer: despawns the entity tree when a fixture is removed from the patch.
@@ -180,10 +188,16 @@ pub fn spawn_fixture(
         beam_params: Vec4::new(half_angle, BEAM_HEIGHT, 2.0, 0.8),
         world_to_cone: Mat4::IDENTITY,
         step_count: 16,
+        depth_bias: 0.0,
     });
 
     let sprite_mesh = meshes.add(build_beam_sprite_quad(beam_radius * 2.0));
     let sprite_mat = sprite_materials.add(BeamSpriteMaterial {
+        color: LinearRgba::WHITE,
+        sprite_params: Vec4::new(0.0, 2.0, 0.0, 0.0),
+        gobo: open_gobo.clone(),
+    });
+    let top_sprite_mat = sprite_materials.add(BeamSpriteMaterial {
         color: LinearRgba::WHITE,
         sprite_params: Vec4::new(0.0, 2.0, 0.0, 0.0),
         gobo: open_gobo,
@@ -228,12 +242,23 @@ pub fn spawn_fixture(
                         Transform::from_xyz(0.0, cone_y, 0.0).with_rotation(cone_rot),
                         BeamCone { id: cfg.id },
                     ));
+                    // Main sprite — visible in FOH (Tier 0) and side view
                     head.spawn((
-                        Mesh3d(sprite_mesh),
+                        Mesh3d(sprite_mesh.clone()),
                         MeshMaterial3d(sprite_mat),
                         Transform::from_xyz(0.0, cone_y, 0.0).with_rotation(cone_rot),
                         BeamSprite { id: cfg.id },
                         Visibility::Hidden,
+                    ));
+                    // Top-view sprite — perpendicular to main sprite, always visible in ortho views
+                    head.spawn((
+                        Mesh3d(sprite_mesh),
+                        MeshMaterial3d(top_sprite_mat),
+                        Transform::from_xyz(0.0, cone_y, 0.0)
+                            .with_rotation(cone_rot * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+                        BeamSpriteTop { id: cfg.id },
+                        Visibility::Visible,
+                        RenderLayers::layer(2),
                     ));
                 });
             });
@@ -263,9 +288,10 @@ pub fn articulate_beams(
     time: Res<Time>,
     mut beam_q: Query<
         (&MeshMaterial3d<BeamMaterial>, &mut Transform, Ref<GlobalTransform>),
-        (With<BeamCone>, Without<YokeJoint>, Without<HeadJoint>),
+        (With<BeamCone>, Without<YokeJoint>, Without<HeadJoint>, Without<BeamSprite>, Without<BeamSpriteTop>),
     >,
-    mut sprite_q: Query<(&MeshMaterial3d<BeamSpriteMaterial>, &GlobalTransform), With<BeamSprite>>,
+    mut sprite_q: Query<(&MeshMaterial3d<BeamSpriteMaterial>, &mut Transform, &GlobalTransform), (With<BeamSprite>, Without<BeamCone>, Without<BeamSpriteTop>)>,
+    mut top_sprite_q: Query<(&MeshMaterial3d<BeamSpriteMaterial>, &mut Transform, &GlobalTransform), (With<BeamSpriteTop>, Without<BeamCone>, Without<BeamSprite>)>,
     mut light_q: Query<&mut PointLight, With<BeamSource>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
     mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
@@ -321,8 +347,11 @@ pub fn articulate_beams(
                 mat.color         = color;
                 mat.gobo_params   = gobo_params;
                 mat.gobo          = gobo_handle.clone();
+                // Use the *base* half-angle here: the shader operates in scaled cone-local
+                // space (world_to_cone includes the XZ zoom scale), so the cone geometry
+                // in that space is always the original base cone.
                 mat.beam_params   = Vec4::new(
-                    target_half_deg.to_radians(),
+                    BASE_HALF_DEG.to_radians(),
                     BEAM_HEIGHT,
                     2.0,
                     0.8,
@@ -337,12 +366,21 @@ pub fn articulate_beams(
 
     // Sprite materials and point lights only need updating when programmer changes.
     if needs_full_update {
-        for (sprite_handle, _global_tf) in &mut sprite_q {
+        for (sprite_handle, mut sprite_transform, _global_tf) in &mut sprite_q {
             if let Some(mat) = sprite_materials.get_mut(sprite_handle.id()) {
                 mat.color = color;
                 mat.sprite_params = Vec4::new(gobo_rotation, 2.0, 0.0, 0.0);
                 mat.gobo = gobo_handle.clone();
             }
+            sprite_transform.scale = Vec3::new(scale_xz, scale_xz, scale_xz);
+        }
+        for (top_sprite_handle, mut top_sprite_transform, _global_tf) in &mut top_sprite_q {
+            if let Some(mat) = sprite_materials.get_mut(top_sprite_handle.id()) {
+                mat.color = color;
+                mat.sprite_params = Vec4::new(gobo_rotation, 2.0, 0.0, 0.0);
+                mat.gobo = gobo_handle.clone();
+            }
+            top_sprite_transform.scale = Vec3::new(scale_xz, scale_xz, scale_xz);
         }
 
         let light_intensity = programmer.dimmer * 500_000.0 * if shutter_open { 1.0 } else { 0.0 };

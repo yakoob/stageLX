@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod beam;
 pub mod beam_sprite;
 pub mod camera;
+pub mod diagnostics;
 pub mod fixture;
 pub mod gobo;
 pub mod lod;
@@ -13,7 +14,7 @@ use stagelx_core::{
     fixture::FixtureInstance,
     types::{DmxAddress, FixtureId},
 };
-use stagelx_state::{FixtureLibraryRes, LoadVenueEvent, PatchRes, VenueLoadState};
+use stagelx_state::{FixtureLibraryRes, LoadVenueEvent, PatchRes, PerfDiagnosticsRes, VenueLoadState};
 use beam::{BeamMaterial, GoboLibrary, setup_gobos};
 use beam_sprite::BeamSpriteMaterial;
 use camera::{foh_camera_input, foh_camera_update};
@@ -21,8 +22,9 @@ use fixture::{FixtureSpawnConfig, spawn_fixture};
 use lod::{
     BeamCompositeMaterial, setup_beam_lod,
     sync_beam_camera_to_foh, evaluate_beam_lod, apply_beam_lod,
-    resize_beam_render_target,
+    sort_beams_front_to_back, resize_beam_render_target,
 };
+use diagnostics::{estimate_gpu_memory, track_beam_counts, track_frame_time};
 pub use venue::VenueRoot;
 
 pub struct StageLxRenderPlugin;
@@ -30,6 +32,7 @@ pub struct StageLxRenderPlugin;
 impl Plugin for StageLxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<VenueLoadState>()
+            .init_resource::<PerfDiagnosticsRes>()
             .add_plugins(MaterialPlugin::<BeamMaterial>::default())
             .add_plugins(MaterialPlugin::<BeamSpriteMaterial>::default())
             .add_plugins(MaterialPlugin::<BeamCompositeMaterial>::default())
@@ -53,8 +56,15 @@ impl Plugin for StageLxRenderPlugin {
                     fixture::articulate_beams,
                     evaluate_beam_lod,
                     apply_beam_lod,
+                    sort_beams_front_to_back,
+                    track_frame_time,
+                    track_beam_counts,
                 )
                     .chain(),
+            )
+            .add_systems(
+                Last,
+                estimate_gpu_memory,
             );
     }
 }
@@ -69,8 +79,10 @@ fn on_load_venue(
     mut venue_state: ResMut<VenueLoadState>,
     existing: Query<Entity, With<VenueRoot>>,
 ) {
-    let path = trigger.event().path.clone();
-    match venue::load_venue(&path, &mut commands, &mut meshes, &mut materials, &existing) {
+    let event = trigger.event();
+    let path = event.path.clone();
+    let offset = event.offset;
+    match venue::load_venue(&path, offset, &mut commands, &mut meshes, &mut materials, &existing) {
         Ok(()) => {
             venue_state.import_error = None;
             venue_state.import_path.clear();
@@ -78,6 +90,8 @@ fn on_load_venue(
         Err(e) => venue_state.import_error = Some(e),
     }
 }
+
+
 
 // ─── Demo fixture startup ─────────────────────────────────────────────────────
 

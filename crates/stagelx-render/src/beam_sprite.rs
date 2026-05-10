@@ -48,9 +48,15 @@ impl Material for BeamSpriteMaterial {
 
 // ─── Components ───────────────────────────────────────────────────────────────
 
-/// Marks a beam sprite entity (Tier 0 billboard).
+/// Marks a beam sprite entity (Tier 0 billboard / ortho-view fallback).
 #[derive(Component)]
 pub struct BeamSprite {
+    pub id: stagelx_core::types::FixtureId,
+}
+
+/// Marks a perpendicular beam sprite used for top-down orthographic views.
+#[derive(Component)]
+pub struct BeamSpriteTop {
     pub id: stagelx_core::types::FixtureId,
 }
 
