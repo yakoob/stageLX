@@ -10,6 +10,7 @@ use bevy::core_pipeline::core_3d::graph::Core3d;
 use std::collections::HashMap;
 
 use stagelx_core::types::FixtureId;
+use stagelx_show::PerfDiagnosticsRes;
 
 use crate::{
     beam::BeamMaterial,
@@ -206,9 +207,18 @@ pub fn evaluate_beam_lod(
     beam_q: Query<(Entity, &GlobalTransform, &BeamCone, Option<&BeamLodTier>)>,
     mut commands: Commands,
     mut scored: Local<Vec<(Entity, f32, BeamLodTier)>>,
+    mut perf: ResMut<PerfDiagnosticsRes>,
 ) {
-    let Ok(window) = windows.single() else { return };
-    let Ok((foh_tf, foh_proj)) = foh_q.single() else { return };
+    let t0 = std::time::Instant::now();
+
+    let Ok(window) = windows.single() else {
+        perf.beam_lod_eval_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        return;
+    };
+    let Ok((foh_tf, foh_proj)) = foh_q.single() else {
+        perf.beam_lod_eval_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        return;
+    };
 
     let fov_y = match foh_proj {
         Projection::Perspective(p) => p.fov,
@@ -298,6 +308,8 @@ pub fn evaluate_beam_lod(
     for (entity, _radius, tier) in scored.drain(..) {
         commands.entity(entity).insert(tier);
     }
+
+    perf.beam_lod_eval_ms = t0.elapsed().as_secs_f32() * 1000.0;
 }
 
 // ─── System: apply LOD tier (visibility, render layers, step count) ───────────
@@ -314,7 +326,9 @@ pub fn apply_beam_lod(
     mut rebuild_lookup: Local<bool>,
     added_sprites: Query<Entity, Added<BeamSprite>>,
     mut removed_sprites: RemovedComponents<BeamSprite>,
+    mut perf: ResMut<PerfDiagnosticsRes>,
 ) {
+    let t0 = std::time::Instant::now();
     // Rebuild sprite lookup only when sprites are added or removed.
     let has_removed = removed_sprites.read().next().is_some();
     if !added_sprites.is_empty() || has_removed {
@@ -370,6 +384,8 @@ pub fn apply_beam_lod(
             }
         }
     }
+
+    perf.beam_lod_apply_ms = t0.elapsed().as_secs_f32() * 1000.0;
 }
 
 // ─── System: sort beams front-to-back for additive-phase early-Z ──────────────
@@ -391,8 +407,14 @@ pub fn sort_beams_front_to_back(
     beam_q: Query<(&MeshMaterial3d<BeamMaterial>, &GlobalTransform), With<BeamCone>>,
     mut beam_materials: ResMut<Assets<BeamMaterial>>,
     mut last_bias: Local<HashMap<AssetId<BeamMaterial>, f32>>,
+    mut perf: ResMut<PerfDiagnosticsRes>,
 ) {
-    let Ok(foh_tf) = foh_q.single() else { return };
+    let t0 = std::time::Instant::now();
+
+    let Ok(foh_tf) = foh_q.single() else {
+        perf.beam_sort_ms = t0.elapsed().as_secs_f32() * 1000.0;
+        return;
+    };
     let cam_pos = foh_tf.translation;
     let cam_forward: Vec3 = foh_tf.forward().into();
 
@@ -416,6 +438,8 @@ pub fn sort_beams_front_to_back(
             last_bias.insert(id, desired_bias);
         }
     }
+
+    perf.beam_sort_ms = t0.elapsed().as_secs_f32() * 1000.0;
 }
 
 // ─── System: resize beam render target on window resize ───────────────────────

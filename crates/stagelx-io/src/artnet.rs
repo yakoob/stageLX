@@ -23,7 +23,7 @@ const ART_POLL_INTERVAL_SECS: f32 = 3.0;
 
 // ─── Packet helpers ───────────────────────────────────────────────────────────
 
-fn build_artdmx(universe: u16, data: &[u8; 512]) -> Vec<u8> {
+pub fn build_artdmx(universe: u16, data: &[u8; 512]) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(530);
     pkt.extend_from_slice(b"Art-Net\0");
     pkt.push(0x00); pkt.push(0x50); // OpCode ArtDMX = 0x5000 LE
@@ -175,7 +175,7 @@ impl IoSource for ArtNetRxSource {
                             continue;
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {
                         if shutdown.try_recv().is_ok() {
                             break;
                         }
@@ -426,7 +426,10 @@ pub fn artnet_receive(
             }
         }
     }
-    stats.rx_count = stats.rx_count.saturating_add(count);
+    if count > 0 {
+        stats.rx_count = stats.rx_count.saturating_add(count);
+        stats.last_rx_at = Some(std::time::Instant::now());
+    }
 }
 
 pub fn dmx_engine_tick(
@@ -457,6 +460,7 @@ pub fn artnet_send(
         match tx.try_send(cmd) {
             Ok(_) => {
                 stats.tx_count = stats.tx_count.saturating_add(1);
+                stats.last_tx_at = Some(std::time::Instant::now());
                 stats.status = ProtocolStatus::Live;
             }
             Err(TrySendError::Full(_)) => {}

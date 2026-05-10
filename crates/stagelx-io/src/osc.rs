@@ -254,7 +254,10 @@ pub fn osc_receive(
             }
         }
     }
-    stats.rx_count = stats.rx_count.saturating_add(count);
+    if count > 0 {
+        stats.rx_count = stats.rx_count.saturating_add(count);
+        stats.last_rx_at = Some(std::time::Instant::now());
+    }
 }
 
 fn osc_float(t: &OscType) -> Option<f32> {

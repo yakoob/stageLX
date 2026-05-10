@@ -8,11 +8,12 @@ pub mod stats;
 pub mod supervisor;
 pub mod usb;
 
+pub use artnet::dmx_engine_tick;
+
 use bevy::prelude::*;
 use artnet::{
     ArtNetState, ArtNetNodeTable,
     artnet_manage_socket, artnet_receive, artnet_send,
-    dmx_engine_tick,
 };
 use config::{
     ArtNetConfig, SacnConfig, UsbConfig, MidiConfig, OscConfig,

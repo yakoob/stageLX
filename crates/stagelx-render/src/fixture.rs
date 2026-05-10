@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use stagelx_core::types::FixtureId;
 use stagelx_patch::{PatchRes, SpawnFixtureEvent, DespawnFixtureEvent};
-use stagelx_show::{FixtureLibraryRes, Programmer};
+use stagelx_show::{FixtureLibraryRes, PerfDiagnosticsRes, Programmer};
 use crate::beam::{BeamMaterial, GoboLibrary, build_beam_cone};
 use crate::beam_sprite::{BeamSprite, BeamSpriteTop, BeamSpriteMaterial, build_beam_sprite_quad};
 
@@ -298,7 +298,10 @@ pub fn articulate_beams(
     mut sprite_materials: ResMut<Assets<BeamSpriteMaterial>>,
     gobo_library: Res<GoboLibrary>,
     mut last_programmer: Local<Programmer>,
+    mut perf: ResMut<PerfDiagnosticsRes>,
 ) {
+    let t0 = std::time::Instant::now();
+
     // Determine whether programmer state has changed since last frame.
     let programmer_changed = *last_programmer != *programmer;
 
@@ -395,6 +398,8 @@ pub fn articulate_beams(
     if programmer_changed {
         *last_programmer = programmer.clone();
     }
+
+    perf.beam_articulate_ms = t0.elapsed().as_secs_f32() * 1000.0;
 }
 
 // ─── Keyboard programmer ──────────────────────────────────────────────────────

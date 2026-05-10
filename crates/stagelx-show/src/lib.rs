@@ -141,6 +141,11 @@ pub struct PerfDiagnosticsRes {
     pub last_fixture_spawn_ms: f32,
     /// Total fixtures spawned since app start.
     pub fixtures_spawned: u64,
+    /// Per-system CPU timings (ms).
+    pub beam_articulate_ms: f32,
+    pub beam_lod_eval_ms: f32,
+    pub beam_lod_apply_ms: f32,
+    pub beam_sort_ms: f32,
 }
 
 impl Default for PerfDiagnosticsRes {
@@ -157,6 +162,10 @@ impl Default for PerfDiagnosticsRes {
             frame_time_ms: 0.0,
             last_fixture_spawn_ms: 0.0,
             fixtures_spawned: 0,
+            beam_articulate_ms: 0.0,
+            beam_lod_eval_ms: 0.0,
+            beam_lod_apply_ms: 0.0,
+            beam_sort_ms: 0.0,
         }
     }
 }

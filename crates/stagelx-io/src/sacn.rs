@@ -196,7 +196,7 @@ impl IoSource for SacnRxSource {
                             }
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted) => {
                         if shutdown.try_recv().is_ok() {
                             break;
                         }
@@ -437,7 +437,10 @@ pub fn sacn_receive(
         buf.copy_from_slice(&pkt.data);
         count += 1;
     }
-    stats.rx_count = stats.rx_count.saturating_add(count);
+    if count > 0 {
+        stats.rx_count = stats.rx_count.saturating_add(count);
+        stats.last_rx_at = Some(std::time::Instant::now());
+    }
 }
 
 /// Send sACN output for the configured universe.
@@ -471,6 +474,7 @@ pub fn sacn_send(
         match tx.try_send(cmd) {
             Ok(_) => {
                 stats.tx_count = stats.tx_count.saturating_add(1);
+                stats.last_tx_at = Some(std::time::Instant::now());
                 stats.status = ProtocolStatus::Live;
             }
             Err(TrySendError::Full(_)) => {}

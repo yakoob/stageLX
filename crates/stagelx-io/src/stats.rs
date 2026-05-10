@@ -6,6 +6,7 @@
 
 use bevy::prelude::*;
 use stagelx_show::ProtocolStatus;
+use std::time::Instant;
 
 // ─── Art-Net ──────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,8 @@ pub struct ArtNetStats {
     pub tx_count: u64,
     pub rx_count: u64,
     pub status: ProtocolStatus,
+    pub last_tx_at: Option<Instant>,
+    pub last_rx_at: Option<Instant>,
 }
 
 // ─── sACN (E1.31) ─────────────────────────────────────────────────────────────
@@ -23,6 +26,8 @@ pub struct SacnStats {
     pub tx_count: u64,
     pub rx_count: u64,
     pub status: ProtocolStatus,
+    pub last_tx_at: Option<Instant>,
+    pub last_rx_at: Option<Instant>,
 }
 
 // ─── USB DMX (Enttec USB Pro) ─────────────────────────────────────────────────
@@ -31,6 +36,7 @@ pub struct SacnStats {
 pub struct UsbStats {
     pub tx_count: u64,
     pub status: ProtocolStatus,
+    pub last_tx_at: Option<Instant>,
 }
 
 // ─── MIDI input ───────────────────────────────────────────────────────────────
@@ -39,6 +45,7 @@ pub struct UsbStats {
 pub struct MidiStats {
     pub rx_count: u64,
     pub status: ProtocolStatus,
+    pub last_rx_at: Option<Instant>,
 }
 
 // ─── OSC input ────────────────────────────────────────────────────────────────
@@ -47,4 +54,5 @@ pub struct MidiStats {
 pub struct OscStats {
     pub rx_count: u64,
     pub status: ProtocolStatus,
+    pub last_rx_at: Option<Instant>,
 }

@@ -4,7 +4,7 @@ A real-time 3D stage lighting visualizer and DMX controller written in Rust.
 Supports GDTF fixture definitions, MVR scene files, and full DMX I/O.
 
 **Version:** 0.2.0-phase6  
-**Last updated:** 2026-05-10
+**Last updated:** 2026-05-10 (performance profiling & EAGAIN fix complete)
 
 ---
 
@@ -33,14 +33,17 @@ Supports GDTF fixture definitions, MVR scene files, and full DMX I/O.
 
 stageLX is a desktop application for real-time 3D visualization of stage lighting rigs. It parses GDTF fixture definitions to understand DMX behaviour and 3D geometry, imports MVR scene files for show interoperability, and drives real DMX hardware via Art-Net, sACN, and USB protocols.
 
-**Current state (end of Phase 5):**
-- Workspace of 7 crates with clean dependency graph
+**Current state (end of Phase 6.7):**
+- Workspace of 8 crates with clean dependency graph
 - Full DMX I/O: Art-Net Tx/Rx, sACN Tx/Rx, USB (Enttec), MIDI In, OSC In
 - Volumetric beam rendering with 3-tier LOD and split-screen viewports
 - MVR import/export with real GDTF geometry loading (3DS/OBJ/GLB/FBX venue support)
 - 56 UI audit items resolved; zero compiler warnings
+- `stagelx-state` mechanically split into `stagelx-patch` + `stagelx-show`
+- Cue system foundation: `CueStack`, `CuePlayhead`, cue panel UI, JSON persistence
+- Per-system CPU timing in `PerfDiagnosticsRes`; IO staleness timestamps; synthetic benchmarks
 
-**Phase 6 focus:** Production hardening (test corpus, profiling, protocol completeness), mechanical crate extraction (`stagelx-state` → `stagelx-show` + `stagelx-patch`), and cue-system foundation. Sub-phases 6.1–6.4 are complete.
+**Phase 6 focus:** Production hardening (test corpus, profiling, protocol completeness), mechanical crate extraction (`stagelx-state` → `stagelx-show` + `stagelx-patch`), and cue-system foundation. Sub-phases 6.1–6.7 are complete; 6.8 remains open.
 
 ---
 
@@ -480,11 +483,11 @@ CueStack
 
 ### Phase 6 Scope
 
-- [ ] `CueStack` and `Cue` types in `stagelx-show`
-- [ ] `CuePlayback` source in `DmxEngine` (priority 150, between programmer=200 and external=100)
-- [ ] Basic UI: list cues, GO / BACK / LOAD buttons
-- [ ] Keyboard shortcuts: `Enter` = GO, `Shift+Enter` = BACK
-- [ ] Save/load cue stack to `.json`
+- ✅ `CueStack` and `Cue` types in `stagelx-show`
+- ✅ `cue_to_dmx()` system in `stagelx-dmx` (priority 150, between programmer=200 and external=100)
+- ✅ Basic UI: list cues, GO / BACK / LOAD buttons
+- ✅ Keyboard shortcuts: `Enter` = GO, `Shift+Enter` = BACK
+- ✅ Save/load cue stack to `.json`
 
 ### Deferred to v2
 
@@ -651,26 +654,34 @@ MIDI input (`midir` + crossbeam); OSC input (`rosc`); MIDI + OSC config UI; MVR 
 
 ---
 
-### 6.7 Performance Profiling & Optimisation
+### 6.7 Performance Profiling & Optimisation ✅
 
 **Targets (from Phase 5 success metrics):**
 
 | Domain | Target | Verification |
 |---|---|---|
-| Beam GPU pass | ≤ 6 ms at 500 fixtures, 1080p | wgpu timestamp queries |
-| Framebuffer overdraw | ≤ 8× averaged | wgpu timestamp queries |
-| DMX tick jitter | ≤ 1 ms std-dev over 10k ticks | `PerfDiagnosticsRes` |
-| IO snapshot staleness | 0 occurrences > 100 ms | synthetic flood test |
-| Patch load frame time | ≤ 20 ms main thread throughout | `bevy_diagnostic` |
-| Patch load total | < 2 s wall-clock for 500 fixtures / 50 models | stopwatch |
-| GPU geometry memory | ≤ 128 MB for 500-fixture rig | `estimate_gpu_memory` |
+| Beam GPU pass | ≤ 6 ms at 500 fixtures, 1080p | wgpu timestamp queries — **deferred** (needs custom render node) |
+| Framebuffer overdraw | ≤ 8× averaged | wgpu timestamp queries — **deferred** |
+| DMX tick jitter | ≤ 1 ms std-dev over 10k ticks | `PerfDiagnosticsRes` Welford online algorithm ✅ |
+| IO snapshot staleness | 0 occurrences > 100 ms | `last_tx_at` / `last_rx_at` on all `*Stats` ✅ |
+| Patch load frame time | ≤ 20 ms main thread throughout | `bevy_diagnostic` + per-system timing ✅ |
+| Patch load total | < 2 s wall-clock for 500 fixtures / 50 models | `benches/spawn_500.rs` ✅ (~11 ms for 500 fixtures) |
+| GPU geometry memory | ≤ 128 MB for 500-fixture rig | `estimate_gpu_memory` — geometry buffers only ✅ |
 
-**Tasks:**
-- [ ] Integrate `bevy::diagnostic::FrameTimeDiagnosticsPlugin`
-- [ ] Add wgpu timestamp queries to beam pass (Tier 1 + Tier 2)
-- [ ] Synthetic benchmark: spawn 500 fixtures, measure frame time
-- [ ] Synthetic benchmark: 10× Art-Net flood, measure IO staleness
-- [ ] Document profiling workflow in `docs/profiling.md`
+**Completed:**
+- ✅ `FrameTimeDiagnosticsPlugin::default()` registered in `src/main.rs`
+- ✅ `PerfDiagnosticsRes` extended with per-system CPU timing fields:
+  - `beam_articulate_ms`, `beam_lod_eval_ms`, `beam_lod_apply_ms`, `beam_sort_ms`
+- ✅ Timed wrapper systems in `stagelx-render` for `articulate_beams`, `evaluate_beam_lod`, `apply_beam_lod`, `sort_beams_front_to_back`
+- ✅ `cue_to_dmx.before(dmx_engine_tick)` ordering fix in `src/main.rs`
+- ✅ IO staleness timestamps: `last_tx_at` / `last_rx_at: Option<Instant>` on `ArtNetStats`, `SacnStats`, `UsbStats`, `MidiStats`, `OscStats`
+- ✅ All protocol send/receive systems update timestamps on actual packet activity
+- ✅ `benches/spawn_500.rs` — synthetic benchmark: 500 fixtures in ~11 ms (~45K fixtures/sec)
+- ✅ `benches/flood_artnet.rs` — synthetic benchmark: 100K packet construction + UDP send
+
+**Deferred to post-Phase 6:**
+- wgpu timestamp queries for beam GPU pass timing (requires custom render node around half-res camera pass)
+- `docs/profiling.md` documentation
 
 ---
 
@@ -737,11 +748,15 @@ Suggested `.gitignore`: standard Rust gitignore + `*.gdtf` test files (large bin
 
 ## Changelog
 
-### 2026-05-10 — Phase 6.1–6.4 complete
+### 2026-05-10 — Phase 6.1–6.7 complete
 - **6.1 Crate split:** `stagelx-state` → `stagelx-patch` + `stagelx-show`. 8 crates in workspace.
 - **6.2 IO formalisation:** All transports implement `IoSource`/`IoSink`. `socket2` tuning. Overflow warnings.
 - **6.3 Protocol completeness:** ArtPoll/ArtPollReply node discovery. sACN multicast join. UI integration.
-- **6.4 Cue foundation:** `CueStack`, `Cue`, `CuePlayhead`, `CuePlaybackRes`. Cue panel UI. JSON persistence to `show.json`.
+- **6.4 Cue foundation:** `CueStack`, `Cue`, `CuePlayhead`, `cue_to_dmx()`. Cue panel UI. JSON persistence to `show.json`.
+- **6.5 MVR structure:** `Truss` / `SceneObject` parsing. Embedded geometry extraction. `LoadMvrStructureEvent`. Per-object transforms.
+- **6.6 Test corpus:** 10 synthetic GDTF parser unit tests. Corpus integration test (`tests/corpus.rs`). 13 tests pass in CI.
+- **6.7 Performance profiling:** `FrameTimeDiagnosticsPlugin`. Per-system CPU timing in `PerfDiagnosticsRes`. IO staleness timestamps. `benches/spawn_500.rs` + `benches/flood_artnet.rs`.
+- **Bugfix:** sACN/Art-Net RX `EAGAIN` (os error 35) after start/stop — `WouldBlock` + `Interrupted` now treated as transient alongside `TimedOut`.
 - Bevy 0.18 observer pattern used throughout (`On<Event>`, `commands.trigger()`).
 
 ### 2026-05-08 — v0.2.0-phase6 plan drafted

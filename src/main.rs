@@ -1,11 +1,12 @@
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::core_3d::graph::Core3d;
+use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::log::LogPlugin;
 use bevy::render::camera::CameraRenderGraph;
 use bevy_egui::{EguiContext, EguiGlobalSettings, EguiPlugin, PrimaryEguiContext};
 use stagelx_dmx::cue_to_dmx;
-use stagelx_io::IoPlugin;
+use stagelx_io::{IoPlugin, dmx_engine_tick};
 use stagelx_render::StageLxRenderPlugin;
 use stagelx_show::{
     load_cue_stack_on_startup,
@@ -52,6 +53,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .insert_resource(EguiGlobalSettings {
             auto_create_primary_context: false,
             ..default()
@@ -67,7 +69,7 @@ fn main() {
         .add_observer(on_back_cue)
         .add_observer(on_delete_cue)
         // Cue playback (priority 150) writes before engine merge.
-        .add_systems(FixedUpdate, cue_to_dmx)
+        .add_systems(FixedUpdate, cue_to_dmx.before(dmx_engine_tick))
         .run();
 }
 

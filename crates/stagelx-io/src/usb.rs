@@ -189,6 +189,7 @@ pub fn usb_send(
         match tx.try_send(cmd) {
             Ok(_) => {
                 stats.tx_count = stats.tx_count.saturating_add(1);
+                stats.last_tx_at = Some(std::time::Instant::now());
                 stats.status = ProtocolStatus::Live;
             }
             Err(TrySendError::Full(_)) => {}
