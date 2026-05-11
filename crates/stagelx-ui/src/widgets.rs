@@ -88,14 +88,15 @@ pub fn vertical_divider(ui: &mut Ui, height: f32) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn search_input(ui: &mut Ui, query: &mut String, hint: &str, width: f32) -> Response {
+    let margin_h = 14.0; // symmetric(7, 4) horizontal margin
     let frame = egui::Frame::new()
         .fill(BG_INPUT)
         .stroke(Stroke::new(1.0, BORDER_SOFT))
         .corner_radius(3.0)
         .inner_margin(egui::Margin::symmetric(7, 4));
     frame.show(ui, |ui| {
+        ui.set_max_width((width - margin_h).max(1.0));
         ui.horizontal(|ui| {
-            ui.set_min_size(Vec2::new(width, 24.0));
             // 12-px magnifier glyph (circle + handle)
             let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
             if ui.is_rect_visible(icon_rect) {
@@ -108,7 +109,7 @@ pub fn search_input(ui: &mut Ui, query: &mut String, hint: &str, width: f32) -> 
                 );
             }
             ui.add_space(4.0);
-            let edit_width = (width - 24.0).max(1.0);
+            let edit_width = ui.available_width().max(1.0);
             ui.add_sized([edit_width, 16.0], egui::TextEdit::singleline(query).hint_text(hint))
         }).inner
     }).inner

@@ -95,11 +95,13 @@ fn fixtures_tab(
                 .max_height(list_height.min(220.0))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    let width = ui.available_width();
+
                     // Header
                     {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(available_width, header_height), egui::Sense::hover());
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, header_height), egui::Sense::hover());
                         let painter = ui.painter();
-                        let cols = compute_library_columns(available_width);
+                        let cols = compute_library_columns(width);
                         let mut x = rect.min.x;
                         let headers = [("Manufacturer", egui::Align2::LEFT_CENTER), ("Model", egui::Align2::LEFT_CENTER), ("Modes", egui::Align2::LEFT_CENTER), ("Used", egui::Align2::RIGHT_CENTER)];
                         for (i, (h, align)) in headers.iter().enumerate() {
@@ -116,9 +118,9 @@ fn fixtures_tab(
                     }
 
                     for ft in res.library.all() {
-                        let (rect, _) = ui.allocate_exact_size(Vec2::new(available_width, row_height), egui::Sense::hover());
+                        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, row_height), egui::Sense::hover());
                         let painter = ui.painter();
-                        let cols = compute_library_columns(available_width);
+                        let cols = compute_library_columns(width);
                         let mut x = rect.min.x;
                         let used = patch.0.fixtures().filter(|f| f.fixture_type_id == ft.fixture_type_id).count();
 

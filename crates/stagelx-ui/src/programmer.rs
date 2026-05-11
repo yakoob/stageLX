@@ -355,7 +355,8 @@ pub fn programmer_panel_docked(
         Stroke::new(1.0, BORDER_SOFT),
     );
     ui.horizontal(|ui| {
-        let btn_width = (available_width - 12.0) / 4.0;
+        let item_spacing_x = ui.spacing().item_spacing.x;
+        let btn_width = (ui.available_width() - 3.0 * item_spacing_x) / 4.0;
         if ui.add_sized([btn_width, 24.0], egui::Button::new("Black").fill(BG_RAISED).stroke(Stroke::new(1.0, BORDER))).clicked() {
             prog.dimmer = 0.0;
         }

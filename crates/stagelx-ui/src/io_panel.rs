@@ -42,9 +42,11 @@ pub fn io_panel_docked(
                 ("MIDI", ActiveProtocol::Midi),
                 ("OSC", ActiveProtocol::Osc),
             ];
-            let n = protocols.len();
+            let n = protocols.len() as f32;
             let spacing = 4.0;
-            let cell_width = (available_width - spacing * (n - 1) as f32) / n as f32;
+            let item_spacing_x = ui.spacing().item_spacing.x;
+            let total_gap = (spacing + item_spacing_x) * (n - 1.0);
+            let cell_width = (available_width - total_gap) / n;
             for (i, &(label, proto)) in protocols.iter().enumerate() {
                 let active = state.active_protocol == proto;
                 let (cell_rect, response) = ui.allocate_exact_size(Vec2::new(cell_width, 40.0), Sense::click());
@@ -77,7 +79,7 @@ pub fn io_panel_docked(
                         if active { FG } else { FG_SECONDARY },
                     );
                 }
-                if i + 1 < n { ui.add_space(spacing); }
+                if i + 1 < n as usize { ui.add_space(spacing); }
             }
         });
     });

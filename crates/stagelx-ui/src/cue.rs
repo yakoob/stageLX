@@ -25,7 +25,8 @@ pub fn cue_panel_docked(
     // ── Capture mode toggle ───────────────────────────────────────────────────
     ui.horizontal(|ui| {
         let w = ui.available_width();
-        let btn_w = w / 2.0 - 2.0;
+        let item_spacing_x = ui.spacing().item_spacing.x;
+        let btn_w = (w - item_spacing_x - 4.0) / 2.0;
 
         let pgm_active = *capture_mode == CaptureMode::Programmer;
         let stage_active = *capture_mode == CaptureMode::Stage;
@@ -53,9 +54,9 @@ pub fn cue_panel_docked(
 
     // ── Toolbar ───────────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
-        ui.set_min_size(Vec2::new(ui.available_width(), 32.0));
-
-        let btn_w = (ui.available_width() - 12.0) / 4.0;
+        let w = ui.available_width();
+        let item_spacing_x = ui.spacing().item_spacing.x;
+        let btn_w = (w - 3.0 * item_spacing_x - 3.0 * 4.0) / 4.0;
 
         // BACK
         let back_btn = egui::Button::new(RichText::new("◀ BACK").size(10.0).strong().color(FG))
