@@ -86,6 +86,9 @@ pub fn programmer_panel_docked(
         }
     }
 
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
     // ── Intensity ─────────────────────────────────────────────────────────────
     widgets::section_header(ui, "Intensity", Some("0–100%"));
     ui.horizontal(|ui| {
@@ -371,6 +374,8 @@ pub fn programmer_panel_docked(
         if ui.add_sized([btn_width, 24.0], egui::Button::new("Reset").fill(Color32::TRANSPARENT).stroke(Stroke::NONE)).clicked() {
             *prog = Programmer::default();
         }
+    });
+
     });
 
     // Hotkey hint

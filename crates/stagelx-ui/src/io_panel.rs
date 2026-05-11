@@ -188,19 +188,24 @@ fn artnet_config(ui: &mut Ui, cfg: &mut ArtNetConfig, nodes: &ArtNetNodeTable) {
         widgets::card(ui, |ui| {
             widgets::eyebrow_widget(ui, &format!("Discovered Nodes ({})", nodes.nodes.len()));
             ui.add_space(4.0);
-            for node in nodes.nodes.values() {
-                ui.horizontal(|ui| {
-                    widgets::status_dot(ui, widgets::DotState::Live);
-                    let max_name_width = (ui.available_width() - 90.0).max(40.0);
-                    ui.add_sized(
-                        [max_name_width, 16.0],
-                        egui::Label::new(RichText::new(&node.short_name).size(11.0).color(FG).strong()).truncate(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(node.ip.to_string()).size(9.0).monospace().color(FG_MUTED));
-                    });
+            egui::ScrollArea::vertical()
+                .max_height(120.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for node in nodes.nodes.values() {
+                        ui.horizontal(|ui| {
+                            widgets::status_dot(ui, widgets::DotState::Live);
+                            let max_name_width = (ui.available_width() - 90.0).max(40.0);
+                            ui.add_sized(
+                                [max_name_width, 16.0],
+                                egui::Label::new(RichText::new(&node.short_name).size(11.0).color(FG).strong()).truncate(),
+                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(RichText::new(node.ip.to_string()).size(9.0).monospace().color(FG_MUTED));
+                            });
+                        });
+                    }
                 });
-            }
         });
     }
 }
