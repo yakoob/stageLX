@@ -189,6 +189,7 @@ fn artnet_config(ui: &mut Ui, cfg: &mut ArtNetConfig, nodes: &ArtNetNodeTable) {
             widgets::eyebrow_widget(ui, &format!("Discovered Nodes ({})", nodes.nodes.len()));
             ui.add_space(4.0);
             egui::ScrollArea::vertical()
+                .id_salt("artnet_nodes_scroll")
                 .max_height(120.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {

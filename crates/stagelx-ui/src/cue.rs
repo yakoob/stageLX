@@ -122,6 +122,7 @@ pub fn cue_panel_docked(
     };
 
     egui::ScrollArea::vertical()
+        .id_salt("cue_scroll")
         .max_height(120.0)
         .auto_shrink([false; 2])
         .show(ui, |ui| {

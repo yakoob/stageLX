@@ -87,6 +87,7 @@ pub fn programmer_panel_docked(
     }
 
     egui::ScrollArea::vertical()
+        .id_salt("programmer_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
         let available_width = ui.available_width();
