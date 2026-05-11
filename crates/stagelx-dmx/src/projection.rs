@@ -22,12 +22,12 @@ pub fn programmer_to_dmx(
         .0
         .get_or_add_source("programmer", 200, crate::merge::MergeStrategy::Ltp);
 
-    let dimmer_byte = (programmer.dimmer * 255.0) as u8;
-    let pan_raw = (programmer.pan * 65535.0) as u16;
-    let tilt_raw = (programmer.tilt * 65535.0) as u16;
-    let r = (programmer.color[0] * 255.0) as u8;
-    let g = (programmer.color[1] * 255.0) as u8;
-    let b = (programmer.color[2] * 255.0) as u8;
+    let dimmer_byte = (programmer.dimmer.clamp(0.0, 1.0) * 255.0) as u8;
+    let pan_raw = (programmer.pan.clamp(0.0, 1.0) * 65535.0) as u16;
+    let tilt_raw = (programmer.tilt.clamp(0.0, 1.0) * 65535.0) as u16;
+    let r = (programmer.color[0].clamp(0.0, 1.0) * 255.0) as u8;
+    let g = (programmer.color[1].clamp(0.0, 1.0) * 255.0) as u8;
+    let b = (programmer.color[2].clamp(0.0, 1.0) * 255.0) as u8;
     let gobo_byte = (programmer.gobo_index as f32 * 32.0).clamp(0.0, 255.0) as u8;
     let gobo_spin_byte = (programmer.gobo_spin.clamp(0.0, 1.0) * 255.0) as u8;
 

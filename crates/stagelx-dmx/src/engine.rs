@@ -33,8 +33,8 @@ pub struct DmxEngine {
 
 impl DmxEngine {
     pub fn add_source(&mut self, source: DmxSource) {
-        self.sources.push(source);
-        self.sources.sort_by_key(|s| s.priority);
+        let pos = self.sources.partition_point(|s| s.priority <= source.priority);
+        self.sources.insert(pos, source);
         self.dirty = true;
     }
 
@@ -48,13 +48,14 @@ impl DmxEngine {
         if let Some(pos) = self.sources.iter().position(|s| s.name == name) {
             return &mut self.sources[pos];
         }
-        self.add_source(DmxSource {
+        let pos = self.sources.partition_point(|s| s.priority <= priority);
+        self.sources.insert(pos, DmxSource {
             name: name.to_string(),
             priority,
             strategy,
             universes: UniverseSet::default(),
         });
-        let pos = self.sources.iter().position(|s| s.name == name).unwrap();
+        self.dirty = true;
         &mut self.sources[pos]
     }
 

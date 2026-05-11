@@ -39,13 +39,10 @@ impl DmxBuffer {
         }
     }
 
-    /// LTP merge: overwrite with `other` where `other` is non-zero.
+    /// LTP merge: unconditionally overwrite every channel with `other`.
+    /// Zero is a valid LTP value (explicit blackout), so no zero-suppression.
     pub fn merge_ltp(&mut self, other: &DmxBuffer) {
-        for (a, b) in self.data.iter_mut().zip(other.data.iter()) {
-            if *b > 0 {
-                *a = *b;
-            }
-        }
+        self.data.copy_from_slice(&other.data);
     }
 
     pub fn clear(&mut self) {
@@ -63,20 +60,16 @@ impl DmxBuffer {
 /// Manages multiple DMX universes indexed by universe number.
 #[derive(Debug, Default)]
 pub struct UniverseSet {
-    buffers: Vec<(u16, DmxBuffer)>,
+    buffers: std::collections::HashMap<u16, DmxBuffer>,
 }
 
 impl UniverseSet {
     pub fn get_or_insert(&mut self, universe: u16) -> &mut DmxBuffer {
-        if let Some(pos) = self.buffers.iter().position(|(id, _)| *id == universe) {
-            return &mut self.buffers[pos].1;
-        }
-        self.buffers.push((universe, DmxBuffer::default()));
-        &mut self.buffers.last_mut().unwrap().1
+        self.buffers.entry(universe).or_insert_with(DmxBuffer::default)
     }
 
     pub fn get(&self, universe: u16) -> Option<&DmxBuffer> {
-        self.buffers.iter().find(|(id, _)| *id == universe).map(|(_, b)| b)
+        self.buffers.get(&universe)
     }
 
     pub fn universes(&self) -> impl Iterator<Item = (u16, &DmxBuffer)> {

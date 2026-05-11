@@ -5,6 +5,7 @@
 //! Phase 7.1: supports cross-fade interpolation via CuePlayhead fade state.
 
 use bevy::prelude::*;
+use std::collections::HashSet;
 use stagelx_core::types::FixtureId;
 use stagelx_patch::PatchRes;
 use stagelx_show::{CuePlayhead, CueStack, CueValues, PlayheadState};
@@ -114,13 +115,7 @@ pub fn cue_to_dmx(
         let duration = duration_ms as f32;
         let t = (elapsed_ms / duration).clamp(0.0, 1.0);
 
-        // Collect every fixture ID that appears in either snapshot.
-        let mut ids: Vec<FixtureId> = from.keys().copied().collect();
-        for id in to.keys() {
-            if !ids.contains(id) {
-                ids.push(*id);
-            }
-        }
+        let ids: HashSet<FixtureId> = from.keys().chain(to.keys()).copied().collect();
 
         for fixture_id in ids {
             let from_values = from.get(&fixture_id).cloned().unwrap_or_default();
