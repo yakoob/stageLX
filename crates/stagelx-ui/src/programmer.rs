@@ -89,6 +89,7 @@ pub fn programmer_panel_docked(
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+        let available_width = ui.available_width();
     // ── Intensity ─────────────────────────────────────────────────────────────
     widgets::section_header(ui, "Intensity", Some("0–100%"));
     ui.horizontal(|ui| {

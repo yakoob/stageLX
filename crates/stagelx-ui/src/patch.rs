@@ -245,6 +245,8 @@ pub fn patch_panel_docked(
         });
 
         ui.horizontal(|ui| {
+            let row_width = ui.available_width();
+
             // Type selector
             let type_ids: Vec<String> = library.library.all()
                 .map(|ft| ft.fixture_type_id.clone())
@@ -295,7 +297,7 @@ pub fn patch_panel_docked(
                         });
                 }
 
-                ui.add_sized([(available_width * 0.15).min(100.0), 24.0], egui::TextEdit::singleline(&mut edit.new_name).hint_text("Fixture name"));
+                ui.add_sized([(row_width * 0.15).min(100.0), 24.0], egui::TextEdit::singleline(&mut edit.new_name).hint_text("Fixture name"));
                 ui.add_sized([60.0, 24.0], egui::TextEdit::singleline(&mut edit.universe_str).hint_text("Univ"));
                 ui.add_sized([60.0, 24.0], egui::TextEdit::singleline(&mut edit.channel_str).hint_text("Ch"));
 

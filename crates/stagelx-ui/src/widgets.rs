@@ -88,7 +88,7 @@ pub fn vertical_divider(ui: &mut Ui, height: f32) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn search_input(ui: &mut Ui, query: &mut String, hint: &str, width: f32) -> Response {
-    let margin_h = 14.0; // symmetric(7, 4) horizontal margin
+    let margin_h = 16.0; // inner_margin symmetric(7, 4) + stroke(1) on each side = 8+8
     let frame = egui::Frame::new()
         .fill(BG_INPUT)
         .stroke(Stroke::new(1.0, BORDER_SOFT))
