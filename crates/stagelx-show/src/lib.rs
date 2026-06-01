@@ -66,7 +66,11 @@ impl Default for Programmer {
     fn default() -> Self {
         Self {
             pan: 0.5,
-            tilt: 0.5,
+            // Angle the beams ~32° off vertical (downstage, away from the FOH
+            // camera) instead of straight down, so the full length of the
+            // ray-marched cones reads in all three views on startup.
+            // tilt_deg = (tilt − 0.5) × tilt_range.
+            tilt: 0.62,
             dimmer: 1.0,
             color: [1.0, 1.0, 1.0],
             pan_range: 540.0,

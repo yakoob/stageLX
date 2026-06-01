@@ -6,7 +6,10 @@
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let sampled = textureSample(beam_texture, beam_sampler, in.uv);
-    // The half-res texture already has additive-blended beam color in RGB.
-    // Output alpha = 1.0 so the quad's AlphaMode::Add passes RGB through unchanged.
-    return vec4<f32>(sampled.rgb, 1.0);
+    // The half-res texture already holds additive-blended beam colour in RGB.
+    // AlphaMode::Add is premultiplied-alpha blending: result = src.rgb + dst·(1−src.a).
+    // Output alpha MUST be 0.0 so the destination (the lit 3-D scene behind this
+    // fullscreen quad) is preserved and the beam colour is added on top. Using
+    // alpha = 1.0 zeroes dst and erases the whole scene behind the quad.
+    return vec4<f32>(sampled.rgb, 0.0);
 }

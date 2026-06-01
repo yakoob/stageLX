@@ -14,9 +14,22 @@
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Perspective cameras (FOH) cast rays from a single eye; orthographic
+    // cameras (TOP/SIDE previews) cast parallel rays. The standard test for an
+    // orthographic projection is clip_from_view[3][3] == 1.0.
+    let is_ortho = view.clip_from_view[3][3] == 1.0;
+
+    // Ray direction into the scene — used for the back-face test and the march.
+    var view_dir: vec3<f32>;
+    if is_ortho {
+        // Camera forward = -Z column of the camera's world transform.
+        view_dir = normalize(-view.world_from_view[2].xyz);
+    } else {
+        view_dir = normalize(in.world_position.xyz - view.world_position);
+    }
+
     // With cull_mode=None both faces rasterize.  Process only the back face
     // (where the ray exits the cone) so each screen pixel marches once.
-    let view_dir = normalize(in.world_position.xyz - view.world_position);
     if dot(view_dir, normalize(in.world_normal)) < 0.0 {
         return vec4<f32>(0.0);
     }
@@ -34,8 +47,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let sk = beam_params.z;         // radial scatter falloff
     let ek = beam_params.w;         // depth extinction falloff
 
-    // Transform ray into cone-local space.  t=0 = camera, t=1 = this fragment.
-    let o  = (world_to_cone * vec4<f32>(view.world_position, 1.0)).xyz;
+    // Build the view ray as two world-space points A→B, then map both into
+    // cone-local space (so the cone's non-uniform XZ zoom scale is handled).
+    // B = this fragment (the cone's exit face). For perspective A is the eye;
+    // orthographic has no eye, so A is a point pushed back along the parallel
+    // ray, far enough to sit in front of the cone (stage is tens of metres).
+    var a_world: vec3<f32>;
+    if is_ortho {
+        a_world = in.world_position.xyz - view_dir * 100.0;
+    } else {
+        a_world = view.world_position;
+    }
+
+    // Transform ray into cone-local space.  t=0 = A, t=1 = this fragment.
+    let o  = (world_to_cone * vec4<f32>(a_world, 1.0)).xyz;
     let fp = (world_to_cone * vec4<f32>(in.world_position.xyz, 1.0)).xyz;
     let d  = fp - o;
 
@@ -84,5 +109,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Average sample density, then scale for perceptible brightness.
     acc = clamp(acc * inv_n * 1.5, 0.0, 1.0);
 
-    return vec4<f32>(color.rgb * gobo_mask, acc * color.a);
+    // The transparent phase uses PREMULTIPLIED-alpha blending
+    // (result = src.rgb + dst.rgb·(1−src.a)), so RGB must be premultiplied by
+    // the accumulated density.  Emitting full-bright RGB with the density only
+    // in the alpha channel makes every covered pixel add full colour regardless
+    // of density — producing solid, blown-out white cones.
+    let a = acc * color.a;
+    return vec4<f32>(color.rgb * gobo_mask * a, a);
 }

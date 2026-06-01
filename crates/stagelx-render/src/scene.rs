@@ -1,4 +1,4 @@
-use bevy::{prelude::*, camera::{ScalingMode, Viewport, visibility::RenderLayers}, window::WindowResized};
+use bevy::{prelude::*, camera::{ScalingMode, Viewport, visibility::RenderLayers}, light::GlobalAmbientLight, window::WindowResized};
 use crate::camera::FohCameraController;
 
 #[derive(Component)]
@@ -11,8 +11,13 @@ pub struct TopCamera;
 pub struct SideCamera;
 
 // Logical-pixel sizes of the egui panels surrounding the viewport area.
+// These MUST match the egui panel sizes in stagelx-ui (`ui_root_system`):
+//   left_rail  .exact_width(300)   right_rail .exact_width(420)
+//   top_bar    .exact_height(36)   status_bar .exact_height(22)
+//   bottom_strip .exact_height(248)
+// A mismatch lets the 3-D viewports slide under an egui panel.
 const LEFT_PANEL: f32 = 300.0;
-const RIGHT_PANEL: f32 = 320.0;
+const RIGHT_PANEL: f32 = 420.0;
 const TOP_BAR: f32 = 36.0;
 const STATUS_BAR: f32 = 22.0;
 const BOTTOM_STRIP: f32 = 248.0;
@@ -79,15 +84,17 @@ pub fn setup_scene(
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(18.0, 0.12, 0.12))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.4, 0.35, 0.1),
-            metallic: 0.6,
-            perceptual_roughness: 0.4,
+            base_color: Color::srgb(0.45, 0.4, 0.15),
+            metallic: 0.2,
+            perceptual_roughness: 0.5,
             ..default()
         })),
         Transform::from_xyz(0.0, 6.0, 0.0),
     ));
 
     // FOH perspective camera — main view (left 75%)
+    // Layer 0 = scene geometry; layer 4 = FOH-only beam visuals (Tier-2 full-res
+    // cones + Tier-0 billboards), kept off the ortho cameras' layers.
     commands.spawn((
         FohCamera,
         Camera3d::default(),
@@ -95,6 +102,7 @@ pub fn setup_scene(
             viewport: Some(foh_vp),
             ..default()
         },
+        RenderLayers::layer(0) | RenderLayers::layer(4),
         FohCameraController::default(),
     ));
 
@@ -113,7 +121,8 @@ pub fn setup_scene(
             },
             ..OrthographicProjection::default_3d()
         }),
-        RenderLayers::layer(0) | RenderLayers::layer(2),
+        // Layer 0 = geometry; layer 3 = ray-marched beam cones (all tiers).
+        RenderLayers::layer(0) | RenderLayers::layer(3),
         // Positioned straight above; Z is "up" in this 2-D view (stage depth)
         Transform::from_xyz(0.0, 40.0, 0.0).looking_at(Vec3::ZERO, Vec3::Z),
     ));
@@ -133,16 +142,40 @@ pub fn setup_scene(
             },
             ..OrthographicProjection::default_3d()
         }),
-        RenderLayers::layer(0) | RenderLayers::layer(2),
+        // Layer 0 = geometry; layer 3 = ray-marched beam cones (all tiers).
+        RenderLayers::layer(0) | RenderLayers::layer(3),
         Transform::from_xyz(40.0, 3.0, 0.0).looking_at(Vec3::new(0.0, 3.0, 0.0), Vec3::Y),
     ));
 
-    // Dim ambient so beam lights are visible (Bevy 0.18: component, not Resource)
-    commands.spawn(AmbientLight {
-        color: Color::srgb(0.04, 0.04, 0.07),
-        brightness: 80.0,
+    // Ambient lift so the stage geometry and fixtures read off black.
+    //
+    // NOTE: In Bevy 0.18 `AmbientLight` is a `#[require(Camera)]` component —
+    // spawning it on its own entity does nothing (it just creates an orphan
+    // camera). The scene-wide ambient is the `GlobalAmbientLight` resource.
+    // The additive beam cones use an unlit custom material, so raising ambient
+    // brightens the geometry without washing out the beams.
+    // The camera uses Bevy's default (Blender, EV100 9.7) exposure tuned for
+    // daylight, so stage-scale light needs to be in the thousands of lux to
+    // register. Floor albedo is low (0.08) to keep the stage dark; fixtures use
+    // higher albedo so they read several times brighter than the floor.
+    commands.insert_resource(GlobalAmbientLight {
+        color: Color::srgb(0.7, 0.7, 0.8),
+        brightness: 1800.0,
         affects_lightmapped_meshes: true,
     });
+
+    // Key light from front-above. Metallic fixture bodies have almost no diffuse
+    // response, so ambient alone leaves them flat — a directional light gives
+    // them specular shading and reads them as solid 3-D objects.
+    commands.spawn((
+        DirectionalLight {
+            color: Color::srgb(0.95, 0.95, 1.0),
+            illuminance: 5000.0,
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_xyz(6.0, 12.0, 10.0).looking_at(Vec3::new(0.0, 4.0, 0.0), Vec3::Y),
+    ));
 }
 
 #[allow(clippy::type_complexity)]

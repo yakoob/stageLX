@@ -346,21 +346,20 @@ pub fn apply_beam_lod(
     }
 
     for (entity, cone, tier, mut vis, mat_handle) in &mut beam_cones {
-        // Toggle cone visibility.
-        *vis = match tier {
-            BeamLodTier::Tier0 => Visibility::Hidden,
-            BeamLodTier::Tier1 | BeamLodTier::Tier2 => Visibility::Visible,
-        };
+        // Cones are always visible; which cameras draw them is controlled purely
+        // by render layers:
+        //   layer 1 — FOH half-res target (Tier 1)
+        //   layer 4 — FOH full-res, main camera only (Tier 2)
+        //   layer 3 — ortho TOP/SIDE previews (all tiers, ray-marched)
+        *vis = Visibility::Visible;
 
-        // Switch render layers.
-        match tier {
-            BeamLodTier::Tier1 => {
-                commands.entity(entity).insert(RenderLayers::layer(1));
-            }
-            BeamLodTier::Tier0 | BeamLodTier::Tier2 => {
-                commands.entity(entity).insert(RenderLayers::layer(0));
-            }
-        }
+        let cone_layers = match tier {
+            // Tier 0: FOH shows a cheap billboard, so the cone is ortho-only.
+            BeamLodTier::Tier0 => RenderLayers::layer(3),
+            BeamLodTier::Tier1 => RenderLayers::layer(1) | RenderLayers::layer(3),
+            BeamLodTier::Tier2 => RenderLayers::layer(4) | RenderLayers::layer(3),
+        };
+        commands.entity(entity).insert(cone_layers);
 
         // Set step count on material.
         if let Some(mat) = beam_materials.get_mut(mat_handle) {
@@ -371,18 +370,17 @@ pub fn apply_beam_lod(
             };
         }
 
-        // Toggle matching sprite visibility and render layers.
-        // Tier 0: sprite visible in FOH (layer 0) and ortho views (layer 2).
-        // Tier 1/2: sprite hidden in FOH but still visible in ortho views (layer 2).
+        // The FOH billboard is only the Tier-0 visual (Tier 1/2 use the cone in
+        // FOH too). It lives on layer 4 so it never leaks into the ortho views,
+        // which now render the ray-marched cone instead of a sprite.
         if let Some(&sprite_entity) = sprite_by_id.get(&cone.id) {
             match tier {
                 BeamLodTier::Tier0 => {
                     commands.entity(sprite_entity).insert(Visibility::Visible);
-                    commands.entity(sprite_entity).insert(RenderLayers::layer(0) | RenderLayers::layer(2));
+                    commands.entity(sprite_entity).insert(RenderLayers::layer(4));
                 }
                 BeamLodTier::Tier1 | BeamLodTier::Tier2 => {
-                    commands.entity(sprite_entity).insert(Visibility::Visible);
-                    commands.entity(sprite_entity).insert(RenderLayers::layer(2));
+                    commands.entity(sprite_entity).insert(Visibility::Hidden);
                 }
             }
         }

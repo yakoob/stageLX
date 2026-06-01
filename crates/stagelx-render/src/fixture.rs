@@ -153,16 +153,18 @@ pub fn spawn_fixture(
     cfg: FixtureSpawnConfig,
     open_gobo: Handle<Image>,
 ) {
+    // Lowish metallic so the bodies take diffuse light from the ambient/key
+    // lights. Fully-metallic surfaces with no environment map render black.
     let body_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.15, 0.15, 0.15),
-        metallic: 0.8,
-        perceptual_roughness: 0.3,
+        base_color: Color::srgb(0.32, 0.33, 0.36),
+        metallic: 0.25,
+        perceptual_roughness: 0.5,
         ..default()
     });
     let joint_mat = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.1, 0.1, 0.1),
-        metallic: 0.9,
-        perceptual_roughness: 0.2,
+        base_color: Color::srgb(0.22, 0.22, 0.24),
+        metallic: 0.3,
+        perceptual_roughness: 0.45,
         ..default()
     });
 
